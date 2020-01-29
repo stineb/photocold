@@ -1,0 +1,111 @@
+---
+title: "PHOTOCOLD"
+author: "Beni Stocker"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: false
+---
+
+<!-- #header-includes: -->
+<!-- #   - \usepackage{amsmath} -->
+<!-- #bibliography: bibliography.bib -->
+
+## Description
+
+*You will investigate the apparent depression of photosynthesis rates in temperate and boreal forests in spring and after cold winters - a phenomenon that has been overlooked in global models. By combining remote sensing data, eddy covariance flux measurements, and modelling, you will find new solutions to an important challenge.*
+
+Ecosystem-level photosynthesis (gross primary production: GPP) can be accurately predicted using remotely sensed information on vegetation cover, local measurements of solar radiation and relatively simple models for the efficiency of photosynthesis (Ryu et al., XXX; Stocker et al., 2019). But one aspect of model-data mismatch stands out: The early-season increase in GPP is simulated to be around a month too early at numerous sites, but not at numerous other sites (Fig. 1). It will be your challenge to find out why and how to resolve this model deficiency.
+
+A hypothesis that may explain this phenomenon is that the photosynthetic apparatus is acclimated to the risk of frost damage in early spring, caused by conditions of low temperature and simultaneously high solar radiation. To prevent excessive light harvesting, photoprotective mechanisms are deployed by plants and lead to reduced photosynthetic carbon assimilation, and hence GPP. At locations with relatively mild winters and limited risk of frost, photoprotection may be less prevalent and photosynthesis rates are high already in the early season.
+
+It will be your task to test this hypothesis. You will implement simple representations of cold-induced reduction of photosynthesis in our model in combination with remotely sensed vegetation cover and test revised predictions against a globally distributed set of site-level GPP measurements (eddy covariance). Your work will set the basis for extending this analysis using local multi-spectral imaging and identifying patterns between reflection data, the apparent GPP depression, and the light and temperature environment in the early season.
+
+This thesis is a great starting point for working with large datasets of the terrestrial biosphere and modelling. Experience with working with R, Python or other data science tools are an advantage. You may start as soon as you like. Please contact me directly if you're interested: Prof. Benjamin Stocker bestocke@ethz.ch.
+
+
+## Previous findings
+
+Based on the evaluations presented in [Stocker et al., 2019](https://www.geosci-model-dev-discuss.net/gmd-2019-200/) we identified several sites with an apparent delay in photosynthesis resumption in the early season, while at most other sites, GPP was accurately simulated also in the early season.
+
+Example sites with delay:
+
+- US-Syv
+- US-UMB
+- US-UMd
+- US-WCr
+- US-Wi3
+- CA-Man
+- CA-NS2
+- CA-NS4
+- CA-NS5
+- CA-Qfo
+- FI-Hyy
+- IT-Tor
+- DE-Hai
+
+Example sites without delay:
+
+- IT-Ren
+- RU-Ha1
+- US-Me2
+- IT-SRo
+- BE-Vie
+- CH-Cha
+- CH-Lae
+- CH-Oe1
+- DE-Gri
+- DE-Obe
+- DE-RuR
+- DE-Tha
+- NL-Hor
+- NL-Loo
+
+The mean seasonality of sites with delay and sites without delay (accurate predictions of early season GPP) is shown below.
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+library(readr)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(cowplot)
+
+ddf <- read_csv("~/data/stocker19gmd_outputs/ddf_fluxnet2015_pmodel_with_forcings_stocker19gmd.csv")
+goodsites <- c("IT-Ren", "RU-Ha1", "US-Me2", "IT-SRo", "BE-Vie", "CH-Cha", "CH-Lae", "CH-Oe1", "DE-Gri", "DE-Obe", "DE-RuR", "DE-Tha", "NL-Hor", "NL-Loo")
+badsites <- c("US-Syv", "US-UMB", "US-UMd", "US-WCr", "US-Wi3", "CA-Man", "CA-NS2", "CA-NS4", "CA-NS5", "CA-Qfo", "FI-Hyy", "IT-Tor", "DE-Hai") 
+
+## Good sites: without delay
+gg_good <- ddf %>% 
+  filter(sitename %in% goodsites) %>% 
+  mutate(doy = yday(date)) %>% 
+  group_by(doy) %>% 
+  summarise(gpp_mod_median = median(gpp_mod_FULL, na.rm=TRUE), gpp_mod_q33 = quantile(gpp_mod_FULL, probs = 0.33, na.rm=TRUE), gpp_mod_q66 = quantile(gpp_mod_FULL, probs = 0.66, na.rm=TRUE),
+            gpp_obs_median = median(gpp_obs, na.rm=TRUE), gpp_obs_q33 = quantile(gpp_obs, probs = 0.33, na.rm=TRUE), gpp_obs_q66 = quantile(gpp_obs, probs = 0.66, na.rm=TRUE)) %>% 
+  gather("source", "gpp_median", c(gpp_mod_median, gpp_obs_median)) %>% 
+  ggplot(aes(x = doy)) + 
+  geom_line(aes(y = gpp_median, color = source)) +
+  geom_ribbon(aes(ymin = gpp_obs_q33, ymax = gpp_obs_q66), fill = "black", alpha = 0.3) +
+  scale_color_manual(values = c("red", "black"), labels = c("modelled", "observed")) +
+  labs(title = "GPP of sites without early season delay", x = "Day of year", y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ))
+
+## Good sites: with delay
+gg_bad <- ddf %>% 
+  filter(sitename %in% badsites) %>% 
+  mutate(doy = yday(date)) %>% 
+  group_by(doy) %>% 
+  summarise(gpp_mod_median = median(gpp_mod_FULL, na.rm=TRUE), gpp_mod_q33 = quantile(gpp_mod_FULL, probs = 0.33, na.rm=TRUE), gpp_mod_q66 = quantile(gpp_mod_FULL, probs = 0.66, na.rm=TRUE),
+            gpp_obs_median = median(gpp_obs, na.rm=TRUE), gpp_obs_q33 = quantile(gpp_obs, probs = 0.33, na.rm=TRUE), gpp_obs_q66 = quantile(gpp_obs, probs = 0.66, na.rm=TRUE)) %>% 
+  gather("source", "gpp_median", c(gpp_mod_median, gpp_obs_median)) %>% 
+  ggplot(aes(x = doy)) + 
+  geom_line(aes(y = gpp_median, color = source)) +
+  geom_ribbon(aes(ymin = gpp_obs_q33, ymax = gpp_obs_q66), fill = "black", alpha = 0.3) +
+  scale_color_manual(values = c("red", "black"), labels = c("modelled", "observed")) +
+  labs(title = "GPP of sites with early season delay", x = "Day of year", y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ))
+
+plot_grid(gg_good, gg_bad, nrow = 1, labels = "auto", label_size = 12)
+ggsave("gpp_good_bad.png", width = 10, height = 4)
+```
+
