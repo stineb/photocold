@@ -424,6 +424,17 @@ df_drivers_fluxnet2015 <- df_tmp %>%
   )
 ```
 
+
+### Subset data
+
+Test this:
+
+Consider subsetting for calibration. Use only data from sites with winter-dormant season: Koeppen Geiger with C and D.
+```{r}
+siteinfo_fluxnet2015 %>% 
+  dplyr::filter(koeppen_code =starts_with("C") | starts_with("D"))
+```
+
 ### Calibrate
 
 Define calibration sites.
