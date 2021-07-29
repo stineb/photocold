@@ -18,7 +18,7 @@ output:
 
 *You will investigate the apparent depression of photosynthesis rates in temperate and boreal forests in spring and after cold winters - a phenomenon that has been overlooked in global models. By combining remote sensing data, eddy covariance flux measurements, and modelling, you will find new solutions to an important challenge.*
 
-Ecosystem-level photosynthesis (gross primary production: GPP) can be accurately predicted using remotely sensed information on vegetation cover, local measurements of solar radiation and relatively simple models for the efficiency of photosynthesis (Ryu et al., XXX; Stocker et al., 2019). But one aspect of model-data mismatch stands out: The early-season increase in GPP is simulated to be around a month too early at numerous sites, but not at numerous other sites (Fig. 1). It will be your challenge to find out why and how to resolve this model deficiency.
+Ecosystem-level photosynthesis (gross primary production: GPP) can be accurately predicted using remotely sensed information on vegetation cover, local measurements of solar radiation and relatively simple models for the efficiency of photosynthesis (Ryu et al., 2019; Stocker et al., 2019). But one aspect of model-data mismatch stands out: The early-season increase in GPP is simulated to be around a month too early at numerous sites, but not at numerous other sites (Fig. 1). It will be your challenge to find out why and how to resolve this model deficiency.
 
 A hypothesis that may explain this phenomenon is that the photosynthetic apparatus is acclimated to the risk of frost damage in early spring, caused by conditions of low temperature and simultaneously high solar radiation. To prevent excessive light harvesting, photoprotective mechanisms are deployed by plants and lead to reduced photosynthetic carbon assimilation, and hence GPP. At locations with relatively mild winters and limited risk of frost, photoprotection may be less prevalent and photosynthesis rates are high already in the early season.
 
@@ -72,6 +72,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(cowplot)
+library(ggplot2)
 
 ddf <- read_csv("~/data/stocker19gmd_outputs/ddf_fluxnet2015_pmodel_with_forcings_stocker19gmd.csv")
 goodsites <- c("IT-Ren", "RU-Ha1", "US-Me2", "IT-SRo", "BE-Vie", "CH-Cha", "CH-Lae", "CH-Oe1", "DE-Gri", "DE-Obe", "DE-RuR", "DE-Tha", "NL-Hor", "NL-Loo")
@@ -105,7 +106,51 @@ gg_bad <- ddf %>%
   scale_color_manual(values = c("red", "black"), labels = c("modelled", "observed")) +
   labs(title = "GPP of sites with early season delay", x = "Day of year", y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ))
 
-plot_grid(gg_good, gg_bad, nrow = 1, labels = "auto", label_size = 12)
-ggsave("gpp_good_bad.png", width = 10, height = 4)
+gg_good
+gg_bad
+
+cow <- plot_grid(gg_good, gg_bad, nrow = 1, labels = "auto", label_size = 12)
+ggsave(cow, "gpp_good_bad.png", width = 10, height = 4)
 ```
 
+The same for just Davos and Laegeren ...
+```{r}
+gg1 <- ddf %>% 
+  filter(sitename %in% c("CH-Dav")) %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(doy, sitename) %>% 
+  summarise(
+    gpp_mod_median = median(gpp_mod_FULL, na.rm=TRUE), 
+    gpp_mod_q33 = quantile(gpp_mod_FULL, probs = 0.33, na.rm=TRUE), 
+    gpp_mod_q66 = quantile(gpp_mod_FULL, probs = 0.66, na.rm=TRUE),
+    gpp_obs_median = median(gpp_obs, na.rm=TRUE), 
+    gpp_obs_q33 = quantile(gpp_obs, probs = 0.33, na.rm=TRUE), 
+    gpp_obs_q66 = quantile(gpp_obs, probs = 0.66, na.rm=TRUE)) %>% 
+  gather("source", "gpp_median", c(gpp_mod_median, gpp_obs_median)) %>% 
+  ggplot(aes(x = doy)) + 
+  geom_line(aes(y = gpp_median, color = source)) +
+  geom_ribbon(aes(ymin = gpp_obs_q33, ymax = gpp_obs_q66), fill = "black", alpha = 0.3) +
+  scale_color_manual(values = c("red", "black"), labels = c("modelled", "observed")) +
+  labs(title = "GPP at CH-Dav", x = "Day of year", y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ))
+
+gg2 <- ddf %>% 
+  filter(sitename %in% c("CH-Lae")) %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(doy, sitename) %>% 
+  summarise(
+    gpp_mod_median = median(gpp_mod_FULL, na.rm=TRUE), 
+    gpp_mod_q33 = quantile(gpp_mod_FULL, probs = 0.33, na.rm=TRUE), 
+    gpp_mod_q66 = quantile(gpp_mod_FULL, probs = 0.66, na.rm=TRUE),
+    gpp_obs_median = median(gpp_obs, na.rm=TRUE), 
+    gpp_obs_q33 = quantile(gpp_obs, probs = 0.33, na.rm=TRUE), 
+    gpp_obs_q66 = quantile(gpp_obs, probs = 0.66, na.rm=TRUE)) %>% 
+  gather("source", "gpp_median", c(gpp_mod_median, gpp_obs_median)) %>% 
+  ggplot(aes(x = doy)) + 
+  geom_line(aes(y = gpp_median, color = source)) +
+  geom_ribbon(aes(ymin = gpp_obs_q33, ymax = gpp_obs_q66), fill = "black", alpha = 0.3) +
+  scale_color_manual(values = c("red", "black"), labels = c("modelled", "observed")) +
+  labs(title = "GPP at CH-Lae", x = "Day of year", y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ))
+
+plot_grid(gg1, gg2, nrow = 1, labels = "auto", label_size = 12)
+ggsave("gpp_Dav_Lae.pdf", width = 10, height = 4)
+```

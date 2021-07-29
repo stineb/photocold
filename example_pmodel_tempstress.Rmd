@@ -426,10 +426,6 @@ df_drivers_fluxnet2015 <- df_tmp %>%
 
 ### Calibrate
 
-Full stack
-
-## Calibrate model
-
 Define calibration sites.
 ```{r}
 flue_sites <- readr::read_csv( "~/data/flue/flue_stocker18nphyt.csv" ) %>%  # also available on zenodo: https://zenodo.org/record/1158524#.YQLMExMzY8M
@@ -528,7 +524,7 @@ params_modl <- update_params(params_modl, settings_calib)
 ```
 
 
-## Run model
+### Run model
 
 ```{r warning=FALSE, message=FALSE}
 df_output <- runread_pmodel_f(
@@ -539,7 +535,7 @@ df_output <- runread_pmodel_f(
      )
 ```
 
-## Run evaluation
+### Run evaluation
 
 Do evaluation only for sites where simulation was run.
 ```{r}
@@ -576,9 +572,9 @@ out_eval <- eval_sofun(
   )
 ```
 
-## Evaluation results
+### Evaluation results
 
-### Metrics table
+#### Metrics table
 
 ```{r}
 out_eval$gpp$fluxnet$metrics %>% 
@@ -586,7 +582,7 @@ out_eval$gpp$fluxnet$metrics %>%
   kable
 ```
 
-### Visualisations
+#### Visualisations
 
 ```{r message=FALSE, warning=FALSE}
 out_eval$gpp$fluxnet$plot$gg_modobs_xdaily
@@ -594,9 +590,9 @@ out_eval$gpp$fluxnet$plot$gg_modobs_spatial_annual
 ```
 
 
-## Appendix
+### Appendix
 
-### Site list
+#### Site list
 
 ```{r}
 siteinfo_fluxnet2015 %>% 
