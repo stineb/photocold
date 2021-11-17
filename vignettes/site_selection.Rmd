@@ -29,6 +29,7 @@ Use only forests. That is `classid`:
 df_sites <- siteinfo_fluxnet2015 %>% 
   filter(koeppen_code %in% c("Cfa", "Cfb", "Cfc", "Dfa", "Dfb", "Dfc", "Dfd") &
            classid %in% c("MF", "ENF", "DBF", "DNF"))
+write_csv(df_sites, file = "../data/df_sites.csv")
 ```
 
 Identical with Yunpeng's selection?
