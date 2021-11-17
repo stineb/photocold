@@ -1,0 +1,57 @@
+---
+title: "Site selection"
+author: "Beni"
+date: "11/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ingestr)
+library(tidyverse)
+library(knitr)
+```
+
+Select sites with a winter-dormant climate (temperate and boreal) without dry season.
+
+- Cfa, Cfb, Cfc
+- Dfa, Dfb, Dfc, Dfd
+
+Use only forests. That is `classid`:
+
+- GRA
+- MF
+- ENF
+- DBF
+- DNF
+
+```{r warning=FALSE, message=FALSE}
+df_sites <- siteinfo_fluxnet2015 %>% 
+  filter(koeppen_code %in% c("Cfa", "Cfb", "Cfc", "Dfa", "Dfb", "Dfc", "Dfd") &
+           classid %in% c("MF", "ENF", "DBF", "DNF"))
+```
+
+Identical with Yunpeng's selection?
+```{r warning=FALSE, message=FALSE}
+df_sites_yp <- read_csv("../data/fluxnet2015_sites_sel_tidy_all.csv") %>% 
+  left_join(siteinfo_fluxnet2015 %>% 
+              select(SiteName = sitename, koeppen_code, classid),
+            by = "SiteName")
+```
+
+Which of mine are also in Yunpeng's?
+```{r}
+df_sites %>% 
+  mutate(included_in_yp = sitename %in% df_sites_yp$SiteName) %>% 
+  select(sitename, included_in_yp, koeppen_code, classid) %>% 
+  kable()
+```
+
+Which of Yunpeng's are also in mine?
+```{r}
+df_sites_yp %>% 
+  mutate(included_in_mine = SiteName %in% df_sites$sitename) %>% 
+  select(SiteName, included_in_mine, koeppen_code, classid) %>% 
+  kable()
+```
+
