@@ -1,0 +1,212 @@
+---
+title: "Run and calibrate P-model"
+author: "Beni"
+date: "11/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ingestr)
+library(tidyverse)
+library(rsofun)
+library(rbeni)
+```
+
+## Site info
+
+Get site info data
+```{r}
+df_sites_modis_era <- read_rds("data/df_sites_modis_era.csv")
+```
+
+## Target data
+
+Use the [ingestr](https://github.com/stineb/ingestr) package once again, now for collecting calibration target data. I.e., GPP based on the nighttime flux decomposition method.
+```{r warning=FALSE, message=FALSE}
+settings_ingestr_fluxnet <- list(
+  dir_hh = "~/data/FLUXNET-2015_Tier1/20191024/HH/", 
+  getswc = FALSE,
+  filter_ntdt = TRUE,
+  threshold_GPP = 0.8,
+  remove_neg = FALSE
+  )
+
+filn <- "ddf_fluxnet_gpp.rds"
+if (!file.exists(filn)){
+  ddf_fluxnet_gpp <- ingestr::ingest(
+    siteinfo = df_sites_modis_era,
+    source    = "fluxnet",
+    getvars = list(gpp = "GPP_NT_VUT_REF",
+                   gpp_unc = "GPP_NT_VUT_SE"),
+    dir = "~/data/FLUXNET-2015_Tier1/20191024/DD/",
+    settings = settings_ingestr_fluxnet,
+    timescale = "d"
+    )
+  saveRDS(ddf_fluxnet_gpp, file = filn)
+} else {
+  ddf_fluxnet_gpp <- read_rds(filn)
+}
+```
+
+## Forcing data
+
+```{r}
+p_model_fluxnet_drivers <- read_rds("data/p_model_fluxnet_drivers.rds")
+```
+
+## Calibrate
+
+```{r}
+settings <- list(
+  method      = "bayesiantools",
+  targetvars  = c("gpp"),
+  timescale   = list(targets_obs = "d"),
+  metric      = cost_rmse_fullstack,
+  dir_results = "./",
+  name        = "mlflx",
+  control = list(
+    sampler = "DEzs",
+    settings = list(
+      burnin = 1000,
+      iterations = 5000
+    )
+  ),
+  par = list(
+    kphio = list(lower=0.04, upper=0.1, init = 0.05),
+    a = list(lower=0, upper=5, init = 3.5),
+    b = list(lower=1, upper=5, init=3.5),
+    tau = list(lower=0, upper=15, init=1),
+    shape = list(lower=0, upper=0.1, init=0)
+    )
+)
+
+pars <- suppressWarnings(
+  calib_sofun(
+    drivers = p_model_fluxnet_drivers,
+    obs = ddf_fluxnet_gpp,
+    settings = settings
+  )
+)
+
+saveRDS(pars, file = "./data/pars_calib.rds")
+```
+
+Run the model again with calibrated parameters
+```{r warning=FALSE, message=FALSE}
+params_modl <- list(
+    kphio           = pars$par[1],
+    soilm_par_a     = pars$par[2],
+    soilm_par_b     = pars$par[3],
+    tau_acclim_tempstress = pars$par[4],
+    par_shape_tempstress  = pars$par[5]
+  )
+
+output <- rsofun::runread_pmodel_f(
+  p_model_fluxnet_drivers,
+  par = params_modl
+  )
+
+saveRDS(output, file = "./data/df_output_rsofun.rds")
+
+output$data[[4]] %>% 
+  ggplot(aes(date, gpp)) +
+  geom_line()
+```
+
+
+## Evaluate model
+
+### Overall
+
+```{r}
+df_modobs <- ddf_fluxnet_gpp %>% 
+  unnest(data) %>% 
+  left_join(
+    output %>% 
+      unnest(data) %>% 
+      dplyr::select(sitename, date, pmodel = gpp),
+    by = c("sitename", "date")
+  )
+```
+
+```{r}
+df_modobs %>% 
+  analyse_modobs2("pmodel", "gpp", type = "hex")
+```
+
+
+### Seasonality
+
+```{r}
+df_season <- df_modobs %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(sitename, doy) %>% 
+  summarise(obs = mean(gpp, na.rm = TRUE), 
+            mod = mean(pmodel, na.rm = TRUE)) %>% 
+  left_join(
+    df_sites_modis_era,
+    by = "sitename"
+  ) %>%
+  mutate(northsouth = ifelse(lat>0, "North", "South")) %>% 
+  dplyr::filter(koeppen_code != "-") %>%
+  mutate(kg_code_northsouth = paste(koeppen_code, northsouth)) %>% 
+  group_by(kg_code_northsouth, doy) %>% 
+  summarise(obs = mean(obs, na.rm = TRUE), mod = mean(mod, na.rm = TRUE))
+```
+
+Seasonal course by climate zone: LSTM works much better.
+```{r}
+df_season %>% 
+  pivot_longer(c(obs, mod), names_to = "Source", values_to = "gpp") %>% 
+  ggplot(aes(doy, gpp, color = Source)) +
+  geom_line() +
+  scale_color_manual(values = c("mod" = "red", "obs" = "black"), labels = c("P-model", "obs.")) +
+  labs(y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ),
+       x = "Day of year") +
+  facet_wrap(~kg_code_northsouth)
+
+ggsave("fig/meanseasonalcycle_by_climate.pdf", width = 9, height = 6)
+```
+
+<!-- Define evaluation settings. -->
+<!-- ```{r} -->
+<!-- evalsites <- p_model_fluxnet_drivers %>% pull(sitename) -->
+<!-- settings_eval <- list( -->
+<!--   benchmark = list( gpp = c("fluxnet") ), -->
+<!--   sitenames = evalsites, -->
+<!--   agg       = 8  # An integer specifying the number of days used to define the width of bins for daily data aggregated to several days -->
+<!--   ) -->
+<!-- ``` -->
+
+<!-- And finally run the evaluation. -->
+<!-- ```{r warning=FALSE, message=FALSE, error=FALSE} -->
+<!-- library(sofunCalVal) -->
+<!-- source("~/sofunCalVal/R/eval_sofun.R") -->
+<!-- out_eval <- eval_sofun(  -->
+<!--   output,  -->
+<!--   settings_eval,  -->
+<!--   settings_sims,  -->
+<!--   obs_eval = ddf_fluxnet_gpp,  -->
+<!--   overwrite = TRUE,  -->
+<!--   light = FALSE  -->
+<!--   ) -->
+<!-- ``` -->
+
+<!-- ### Evaluation results -->
+
+<!-- #### Metrics table -->
+
+<!-- ```{r} -->
+<!-- out_eval$gpp$fluxnet$metrics %>%  -->
+<!--   bind_rows(.id = "Level") %>%  -->
+<!--   kable -->
+<!-- ``` -->
+
+<!-- #### Visualisations -->
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- out_eval$gpp$fluxnet$plot$gg_modobs_xdaily -->
+<!-- out_eval$gpp$fluxnet$plot$gg_modobs_spatial_annual -->
+<!-- ``` -->
+
