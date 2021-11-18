@@ -89,7 +89,7 @@ pars <- suppressWarnings(
   )
 )
 
-saveRDS(pars, file = "./data/pars_calib.rds")
+saveRDS(pars, file = "../data/pars_calib.rds")
 ```
 
 Run the model again with calibrated parameters
@@ -107,7 +107,7 @@ output <- rsofun::runread_pmodel_f(
   par = params_modl
   )
 
-saveRDS(output, file = "./data/df_output_rsofun.rds")
+saveRDS(output, file = "../data/df_output_rsofun.rds")
 
 output$data[[4]] %>% 
   ggplot(aes(date, gpp)) +
@@ -138,8 +138,9 @@ df_modobs %>%
 
 ### Seasonality
 
+#### By climate
 ```{r}
-df_season <- df_modobs %>% 
+df_season_climate <- df_modobs %>% 
   mutate(doy = lubridate::yday(date)) %>% 
   group_by(sitename, doy) %>% 
   summarise(obs = mean(gpp, na.rm = TRUE), 
@@ -155,9 +156,9 @@ df_season <- df_modobs %>%
   summarise(obs = mean(obs, na.rm = TRUE), mod = mean(mod, na.rm = TRUE))
 ```
 
-Seasonal course by climate zone: LSTM works much better.
+Seasonal course by climate zone:
 ```{r}
-df_season %>% 
+df_season_climate %>% 
   pivot_longer(c(obs, mod), names_to = "Source", values_to = "gpp") %>% 
   ggplot(aes(doy, gpp, color = Source)) +
   geom_line() +
@@ -166,7 +167,32 @@ df_season %>%
        x = "Day of year") +
   facet_wrap(~kg_code_northsouth)
 
-ggsave("fig/meanseasonalcycle_by_climate.pdf", width = 9, height = 6)
+ggsave("../fig/meanseasonalcycle_by_climate.pdf", width = 9, height = 6)
+```
+
+#### By site
+```{r}
+df_season_site <- df_modobs %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(sitename, doy) %>% 
+  summarise(obs = mean(gpp, na.rm = TRUE), 
+            mod = mean(pmodel, na.rm = TRUE)) %>% 
+  group_by(sitename, doy) %>% 
+  summarise(obs = mean(obs, na.rm = TRUE), mod = mean(mod, na.rm = TRUE))
+```
+
+Seasonal course by climate zone:
+```{r}
+df_season_site %>% 
+  pivot_longer(c(obs, mod), names_to = "Source", values_to = "gpp") %>% 
+  ggplot(aes(doy, gpp, color = Source)) +
+  geom_line() +
+  scale_color_manual(values = c("mod" = "red", "obs" = "black"), labels = c("P-model", "obs.")) +
+  labs(y = expression( paste("GPP (g C m"^-2, " d"^-1, ")" ) ),
+       x = "Day of year") +
+  facet_wrap(~sitename)
+
+ggsave("../fig/meanseasonalcycle_by_site.pdf", width = 15, height = 30)
 ```
 
 <!-- Define evaluation settings. -->
