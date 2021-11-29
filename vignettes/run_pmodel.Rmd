@@ -17,7 +17,7 @@ library(rbeni)
 
 Get site info data
 ```{r}
-df_sites_modis_era <- read_rds("data/df_sites_modis_era.csv")
+df_sites_modis_era <- read_rds("../data/df_sites_modis_era.csv")
 ```
 
 ## Target data
@@ -32,7 +32,7 @@ settings_ingestr_fluxnet <- list(
   remove_neg = FALSE
   )
 
-filn <- "ddf_fluxnet_gpp.rds"
+filn <- "../data/ddf_fluxnet_gpp.rds"
 if (!file.exists(filn)){
   ddf_fluxnet_gpp <- ingestr::ingest(
     siteinfo = df_sites_modis_era,
@@ -52,19 +52,19 @@ if (!file.exists(filn)){
 ## Forcing data
 
 ```{r}
-p_model_fluxnet_drivers <- read_rds("data/p_model_fluxnet_drivers.rds")
+p_model_fluxnet_drivers <- read_rds("../data/p_model_fluxnet_drivers.rds")
 ```
 
 ## Calibrate
 
-```{r}
+```{r warning=FALSE}
 settings <- list(
   method      = "bayesiantools",
   targetvars  = c("gpp"),
   timescale   = list(targets_obs = "d"),
-  metric      = cost_rmse_fullstack,
+  metric      = cost_rmse_photocold,
   dir_results = "./",
-  name        = "mlflx",
+  name        = "yunpeng",
   control = list(
     sampler = "DEzs",
     settings = list(
@@ -76,23 +76,21 @@ settings <- list(
     kphio = list(lower=0.04, upper=0.1, init = 0.05),
     a = list(lower=0, upper=5, init = 3.5),
     b = list(lower=1, upper=5, init=3.5),
-    tau = list(lower=0, upper=15, init=1),
-    shape = list(lower=0, upper=0.1, init=0)
+    tau = list(lower=0, upper=45, init=15),
+    shape = list(lower=0, upper=1.0, init=0.1)
     )
 )
 
-pars <- suppressWarnings(
-  calib_sofun(
-    drivers = p_model_fluxnet_drivers,
-    obs = ddf_fluxnet_gpp,
+pars <- calib_sofun(
+    drivers  = p_model_fluxnet_drivers,
+    obs      = ddf_fluxnet_gpp,
     settings = settings
-  )
-)
+    )
 
-saveRDS(pars, file = "../data/pars_calib.rds")
+saveRDS(pars, file = "../data/pars_calib_photocold.rds")
 ```
 
-Run the model again with calibrated parameters
+Run the model with calibrated from global calibration (see sofunBench)
 ```{r warning=FALSE, message=FALSE}
 params_modl <- list(
     kphio           = pars$par[1],
@@ -132,7 +130,7 @@ df_modobs <- ddf_fluxnet_gpp %>%
 
 ```{r}
 df_modobs %>% 
-  analyse_modobs2("pmodel", "gpp", type = "hex")
+  analyse_modobs2("pmodel", "gpp", type = "heat")
 ```
 
 
@@ -192,7 +190,7 @@ df_season_site %>%
        x = "Day of year") +
   facet_wrap(~sitename)
 
-ggsave("../fig/meanseasonalcycle_by_site.pdf", width = 15, height = 30)
+ggsave("../fig/meanseasonalcycle_by_site_photocold.pdf", width = 15, height = 30)
 ```
 
 <!-- Define evaluation settings. -->

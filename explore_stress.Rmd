@@ -1,0 +1,219 @@
+---
+title: "Explore stress"
+author: "Beni"
+date: "11/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## Load data
+
+Load modelled and observed from global calibration at tag v4.2. Subset to required sites only.
+
+```{r cars}
+out_eval <- read_rds("~/data/rsofun_benchmarking/out_eval_v4.2.rds")
+
+## add modelled and observed to dates and sites required for this here
+ddf <- read_rds("data/df_output_rsofun.rds") %>% 
+  dplyr::select(sitename, data) %>% 
+  unnest(data) %>% 
+  dplyr::select(sitename, date) %>% 
+  left_join(
+    out_eval$gpp$fluxnet$data$ddf,
+    by = c("sitename", "date")
+  )
+
+# df_sites <- read_rds("data/df_sites_modis_era.csv") %>% 
+#   dplyr::select(sitename, lat, koeppen_code)
+
+# drivers
+ddf_drivers <- read_rds("data/p_model_fluxnet_drivers.rds") %>% 
+  dplyr::select(sitename, forcing) %>% 
+  unnest(forcing) %>% 
+  mutate(ppfd = 1e6 * ppfd)
+
+# # observed gpp
+# ddf_obs <- read_rds("data/ddf_fluxnet_gpp.rds") %>% 
+#   unnest(data)
+
+## combine
+ddf <- ddf %>% 
+  
+  ## add ppfd
+  left_join(
+    ddf_drivers %>% 
+      dplyr::select(sitename, date, ppfd, tmin, temp),
+    by = c("sitename", "date")
+  )
+  
+  # ## add observed gpp
+  # left_join(
+  #   ddf_obs,
+  #   by = c("sitename", "date")
+  # )
+  
+  # left_join(
+  #   df_sites,
+  #   by = "sitename"
+  # ) %>% 
+  # rename(obs = gpp) %>% 
+  # dplyr::select(-gpp_unc)
+```
+
+Some missing data
+```{r}
+ddf %>% 
+  visdat::vis_miss(cluster = FALSE, warn_large_data = FALSE)
+```
+
+## Seasonal cycle before correction
+
+```{r}
+doydf <- ddf %>% 
+  mutate(doy = lubridate::yday(date),
+         hemisphere = ifelse(lat > 0, "north", "south")) %>% 
+  mutate(climatezone = paste(koeppen_code, hemisphere)) %>% 
+  group_by(climatezone, doy) %>% 
+  summarise(mod = mean(mod, na.rm = TRUE), obs = mean(obs, na.rm = TRUE)) %>% 
+  dplyr::filter(climatezone != "NA NA")
+```
+
+```{r}
+doydf %>% 
+  pivot_longer(c(obs, mod), names_to = "source", values_to = "gpp") %>% 
+  ggplot() +
+  geom_line(aes(x = doy, y = gpp, color = source), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  facet_wrap( ~climatezone ) +    # , labeller = labeller(climatezone = list_rosetta)
+  theme_gray() +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Setup: ",
+    values=c("red", "black")
+    # values=c("FULL" = "#DE1A1A", "Observed" = "black")
+    )
+```
+
+## Hardening function
+
+$$
+h = \frac{1}{1 + e^{a + bx}}
+$$
+
+```{r}
+f_hardening <- function(temp, param){
+  
+  xx <- (-1) * temp # * ppfd
+  xx <- param["b"] * xx + param["a"]
+  yy <- 1 / (1 + exp(xx))
+  return(yy)  
+}
+
+ggplot() +
+  geom_function(fun = f_hardening, args = list(param = c("a" = 0, "b" = 0.5))) +
+  xlim(-10, 30)
+```
+
+## Dehardening function
+
+Has the same functional form as the hardening function, but uses cumulative degree days as an independent variable.
+```{r}
+f_dehardening <- function(temp, param){
+  
+  xx <- (-1) * temp # * ppfd
+  xx <- param["b"] * (xx - param["a"])
+  yy <- 1 / (1 + exp(xx))
+  return(yy)  
+}
+
+ggplot() +
+  geom_function(fun = f_dehardening, args = list(param = c("a" = -50, "b" = 0.1))) +
+  xlim(-10, 100)
+```
+
+
+## Algorithm
+
+Example
+```{r}
+df <- ddf %>% 
+  filter(sitename == "US-Ha1")
+
+df %>% 
+  ggplot() +
+  geom_line(aes(date, temp)) +
+  geom_line(aes(date, tmin), color = "royalblue")
+```
+
+Applying the hardening/dehardening to the time series.
+```{r}
+param_harden <- c("a" = 0, "b" = 0.5)
+param_deharden <- c("a" = -50, "b" = 0.1)
+level_hard <- 1.0  # start without hardening
+gdd <- 0
+df$f_stress <- rep(NA, nrow(df))
+
+for (idx in seq(nrow(df))){
+  
+  ## determine hardening level
+  level_hard_new <-  f_hardening(df$tmin[idx], param_harden)
+  
+  if (level_hard_new < level_hard){
+    
+    ## entering deeper hardening
+    level_hard <- level_hard_new
+    
+    ## re-start recovery
+    gdd <- 0
+
+    # print(paste("Hardening to", level_hard, "on", df$date[idx]))
+  }
+  
+  ## accumulate growing degree days (GDD)
+  gdd <- gdd + max(0, (df$temp[idx] - 5.0))
+  
+  ## de-harden based on GDD. f_stress = 1: no stress
+  level_hard <- level_hard + (1-level_hard) * f_dehardening(gdd, param_deharden)
+  df$f_stress[idx] <- level_hard
+}
+```
+
+Hardening stress function visualised for the first 200 days.
+```{r}
+df %>%
+  slice(1:200) %>% 
+  ggplot() +
+  geom_line(aes(date, f_stress), color = "red")
+```
+
+Better fit of multi-year mean seasonal cycle for US-Ha1? Yes.
+```{r}
+df <- df %>% 
+  mutate(mod2 = f_stress * mod)
+
+df %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(doy) %>% 
+  summarise(mod = mean(mod, na.rm = TRUE), mod2 = mean(mod2, na.rm = TRUE), obs = mean(obs, na.rm = TRUE)) %>% 
+  pivot_longer(c(obs, mod, mod2), names_to = "source", values_to = "gpp") %>% 
+  ggplot() +
+  geom_line(aes(x = doy, y = gpp, color = source), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Setup: ",
+    values=c("red", "springgreen3", "black")
+    # values=c("FULL" = "#DE1A1A", "Observed" = "black")
+    )
+
+```
+
+
+
+
