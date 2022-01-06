@@ -130,7 +130,7 @@ settings <- list(
   method      = "bayesiantools",
   targetvars  = c("gpp"),
   timescale   = list(targets_obs = "y"),
-  metric      = cost_rmse_photocold,
+  metric      = cost_mse_photocold,
   dir_results = "./",
   name        = "photocold",
   control     = list(
@@ -149,7 +149,8 @@ settings <- list(
     kphio_par_b = list(lower=0.1,  upper=10.0, init = 0.50),
     
     kphio_par_c = list(lower=1,    upper=200,  init = 50.0),
-    kphio_par_d = list(lower=0.01, upper=10,   init = 0.1)
+    kphio_par_d = list(lower=0.01, upper=10,   init = 0.1),
+    kphio_par_e = list(lower=0   , upper=10,   init = 5)
     )
 )
 ```
@@ -161,8 +162,16 @@ filn <- "../data/pars_calib_photocold.rds"
 if (!file.exists(filn) || overwrite){
   set.seed(1982)
   pars <- calib_sofun(
-    drivers  = dplyr::filter(df_drivers_fluxnet2015, sitename %in% calibsites),
-    obs      = ddf_fluxnet_gpp,
+    drivers  = df_drivers_fluxnet2015 %>% 
+      dplyr::filter(sitename %in% calibsites) %>% 
+      mutate(forcing = purrr::map(
+        forcing, 
+        ~{mutate(., year=lubridate::year(date)) %>% filter(year == 2000)})),
+    obs      = ddf_fluxnet_gpp %>% 
+      dplyr::filter(sitename %in% calibsites) %>% 
+      mutate(data = purrr::map(
+        data, 
+        ~{mutate(., year=lubridate::year(date)) %>% filter(year == 2000)})),
     settings = settings
     )
   saveRDS(pars, file = filn)
@@ -187,7 +196,8 @@ params_modl <- list(
     kphio_par_a = pars$par[4],
     kphio_par_b = pars$par[5],
     kphio_par_c = pars$par[6],
-    kphio_par_d = pars$par[7]
+    kphio_par_d = pars$par[7],
+    kphio_par_e = pars$par[8]
   )
 
 params_modl
@@ -207,7 +217,10 @@ params_modl
 ```{r warning=FALSE, message=FALSE}
 output <- rsofun::runread_pmodel_f(
   df_drivers_fluxnet2015 %>% 
-    filter(sitename %in% calibsites),
+      dplyr::filter(sitename %in% calibsites) %>% 
+      mutate(forcing = purrr::map(
+        forcing, 
+        ~{mutate(., year=lubridate::year(date)) %>% filter(year == 2000)})),
   par = params_modl
   )
 
@@ -218,6 +231,7 @@ saveRDS(output, file = "../data/output_photocold.rds")
 
 ### Single site: US-Ha1
 
+(single year)
 ```{r}
 df_modobs <- output %>% 
   filter(sitename %in% calibsites) %>% 
@@ -239,6 +253,11 @@ df_modobs %>%
   # ggplot() +
   # geom_hex(aes(mod, obs))
   analyse_modobs2("mod", "obs")
+
+df_modobs %>% 
+  ggplot() +
+  geom_line(aes(date, obs)) +
+  geom_line(aes(date, mod), color = "red")
 ```
 
 ```{R}
