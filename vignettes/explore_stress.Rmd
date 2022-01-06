@@ -18,7 +18,7 @@ Load modelled and observed from global calibration at tag v4.2. Subset to requir
 out_eval <- read_rds("~/data/rsofun_benchmarking/out_eval_v4.2.rds")
 
 ## add modelled and observed to dates and sites required for this here
-ddf <- read_rds("data/df_output_rsofun.rds") %>% 
+ddf <- read_rds("../data/df_output_rsofun.rds") %>% 
   dplyr::select(sitename, data) %>% 
   unnest(data) %>% 
   dplyr::select(sitename, date) %>% 
@@ -31,7 +31,7 @@ ddf <- read_rds("data/df_output_rsofun.rds") %>%
 #   dplyr::select(sitename, lat, koeppen_code)
 
 # drivers
-ddf_drivers <- read_rds("data/p_model_fluxnet_drivers.rds") %>% 
+ddf_drivers <- read_rds("../data/p_model_fluxnet_drivers.rds") %>% 
   dplyr::select(sitename, forcing) %>% 
   unnest(forcing) %>% 
   mutate(ppfd = 1e6 * ppfd)
@@ -109,14 +109,21 @@ $$
 f_hardening <- function(temp, param){
   
   xx <- (-1) * temp # * ppfd
-  xx <- param["b"] * xx + param["a"]
+  xx <- param["b"] * (xx + param["a"])
   yy <- 1 / (1 + exp(xx))
   return(yy)  
 }
 
+par <- readRDS("../data/pars_calib_photocold.rds")
 ggplot() +
-  geom_function(fun = f_hardening, args = list(param = c("a" = 0, "b" = 0.5))) +
-  xlim(-10, 30)
+  geom_function(fun = f_hardening, 
+                args = list(param = c(
+                  # "a" = par$par[["kphio_par_a"]], 
+                  # "b" = par$par[["kphio_par_b"]]
+                  "a" = 5, 
+                  "b" = 0.5
+                  ))) +
+  xlim(-20, 30)
 ```
 
 ## Dehardening function
@@ -126,13 +133,24 @@ Has the same functional form as the hardening function, but uses cumulative degr
 f_dehardening <- function(temp, param){
   
   xx <- (-1) * temp # * ppfd
-  xx <- param["b"] * (xx - param["a"])
+  xx <- param["b"] * (xx + param["a"])
   yy <- 1 / (1 + exp(xx))
   return(yy)  
 }
 
 ggplot() +
-  geom_function(fun = f_dehardening, args = list(param = c("a" = -50, "b" = 0.1))) +
+  geom_function(
+    fun = f_dehardening, 
+    args = list(param = c(
+      "a" = 50, 
+      "b" = 0.1
+      ))) +
+    #   fun = f_dehardening, 
+    # args = list(param = c(
+    #   "a" = par$par[["kphio_par_c"]], 
+    #   "b" = par$par[["kphio_par_d"]]
+      # ))) +
+  
   xlim(-10, 100)
 ```
 
@@ -152,8 +170,8 @@ df %>%
 
 Applying the hardening/dehardening to the time series.
 ```{r}
-param_harden <- c("a" = 0, "b" = 0.5)
-param_deharden <- c("a" = -50, "b" = 0.1)
+param_harden <- c("a" = 5, "b" = 0.5)
+param_deharden <- c("a" = 50, "b" = 0.1)
 level_hard <- 1.0  # start without hardening
 gdd <- 0
 df$f_stress <- rep(NA, nrow(df))
@@ -183,12 +201,46 @@ for (idx in seq(nrow(df))){
 }
 ```
 
+Run a second time, now with slower recovery
+```{r}
+param_deharden <- c("a" = 80, "b" = 0.1)
+level_hard <- 1.0  # start without hardening
+gdd <- 0
+df$f_stress_slow <- rep(NA, nrow(df))
+
+for (idx in seq(nrow(df))){
+  
+  ## determine hardening level
+  level_hard_new <-  f_hardening(df$tmin[idx], param_harden)
+  
+  if (level_hard_new < level_hard){
+    
+    ## entering deeper hardening
+    level_hard <- level_hard_new
+    
+    ## re-start recovery
+    gdd <- 0
+
+    # print(paste("Hardening to", level_hard, "on", df$date[idx]))
+  }
+  
+  ## accumulate growing degree days (GDD)
+  gdd <- gdd + max(0, (df$temp[idx] - 5.0))
+  
+  ## de-harden based on GDD. f_stress = 1: no stress
+  level_hard <- level_hard + (1-level_hard) * f_dehardening(gdd, param_deharden)
+  df$f_stress_slow[idx] <- level_hard
+}
+```
+
+
 Hardening stress function visualised for the first 200 days.
 ```{r}
 df %>%
   slice(1:200) %>% 
   ggplot() +
-  geom_line(aes(date, f_stress), color = "red")
+  geom_line(aes(date, f_stress), color = "red") +
+  geom_line(aes(date, f_stress_slow), color = "royalblue")
 ```
 
 Better fit of multi-year mean seasonal cycle for US-Ha1? Yes.

@@ -15,7 +15,7 @@ library(lubridate)
 ```
 
 
-This workflow is adopted from the benchmarking in sofunBench (at v4.2), see [here](https://github.com/computationales/sofunBench/blob/main/tag_v4.2/benchmark_gpp_FLUXNET2015_ensemble_v4.2.Rmd)
+This workflow is adopted from the benchmarking in sofunBench (at v4.2), see [here](https://github.com/computationales/sofunBench/blob/main/tag_v4.2/benchmark_gpp_FLUXNET2015_ensemble_v4.2.Rmd).
 
 ## Load rsofun
 
@@ -85,13 +85,15 @@ flue_sites <- readr::read_csv( "~/data/flue/flue_stocker18nphyt.csv" ) %>%
               distinct(site) %>% 
               pull(site)
 
-calibsites <- siteinfo_fluxnet2015 %>% 
-  dplyr::filter(!(sitename %in% c("DE-Akm", "IT-Ro1"))) %>%  # excluded because fapar data could not be downloaded (WEIRD)
-  # dplyr::filter(!(sitename %in% c("AU-Wom"))) %>%  # excluded because no GPP data was found in FLUXNET file
-  dplyr::filter(sitename != "FI-Sod") %>%  # excluded because some temperature data is missing
-  dplyr::filter( c4 %in% c(FALSE, NA) & classid != "CRO" & classid != "WET" ) %>%
-  dplyr::filter( sitename %in% flue_sites ) %>%
-  pull(sitename)
+# calibsites <- siteinfo_fluxnet2015 %>% 
+#   dplyr::filter(!(sitename %in% c("DE-Akm", "IT-Ro1"))) %>%  # excluded because fapar data could not be downloaded (WEIRD)
+#   # dplyr::filter(!(sitename %in% c("AU-Wom"))) %>%  # excluded because no GPP data was found in FLUXNET file
+#   dplyr::filter(sitename != "FI-Sod") %>%  # excluded because some temperature data is missing
+#   dplyr::filter( c4 %in% c(FALSE, NA) & classid != "CRO" & classid != "WET" ) %>%
+#   dplyr::filter( sitename %in% flue_sites ) %>%
+#   pull(sitename)
+
+calibsites <- "US-Ha1"
 ```
 
 Use the [ingestr](https://github.com/stineb/ingestr) package once again, now for collecting calibration target data. I.e., GPP based on the nighttime flux decomposition method.
@@ -135,15 +137,18 @@ settings <- list(
     sampler = "DEzs",
     settings = list(
     burnin = 1500,
-    iterations = 5000
+    iterations = 10000
     )),
   par = list(
     kphio       = list(lower=0.03, upper=0.2,  init = 0.09),
+    
     soilm_par_a = list(lower=0.00, upper=1.0,  init = 0.33),
     soilm_par_b = list(lower=0.00, upper=10.0, init = 1.5),
-    kphio_par_a = list(lower=-20,  upper=10,   init = 0.00),
+    
+    kphio_par_a = list(lower=-10,  upper=10,   init = 5.00),
     kphio_par_b = list(lower=0.1,  upper=10.0, init = 0.50),
-    kphio_par_c = list(lower=-200, upper=-1,   init = -50.0),
+    
+    kphio_par_c = list(lower=1,    upper=200,  init = 50.0),
     kphio_par_d = list(lower=0.01, upper=10,   init = 0.1)
     )
 )
@@ -175,13 +180,17 @@ Update model parameters.
 ```{r}
 params_modl <- list(
     kphio       = pars$par[1],
+    
     soilm_par_a = pars$par[2],
     soilm_par_b = pars$par[3],
+    
     kphio_par_a = pars$par[4],
     kphio_par_b = pars$par[5],
     kphio_par_c = pars$par[6],
     kphio_par_d = pars$par[7]
   )
+
+params_modl
 ```
 
 
@@ -197,7 +206,8 @@ params_modl <- list(
 
 ```{r warning=FALSE, message=FALSE}
 output <- rsofun::runread_pmodel_f(
-  df_drivers_fluxnet2015,
+  df_drivers_fluxnet2015 %>% 
+    filter(sitename %in% calibsites),
   par = params_modl
   )
 
@@ -205,6 +215,44 @@ saveRDS(output, file = "../data/output_photocold.rds")
 ```
 
 ## Run evaluation
+
+### Single site: US-Ha1
+
+```{r}
+df_modobs <- output %>% 
+  filter(sitename %in% calibsites) %>% 
+  select(sitename, data) %>% 
+  unnest(data) %>% 
+  select(sitename, date, mod = gpp) %>% 
+  left_join(
+    ddf_fluxnet_gpp %>% 
+      filter(sitename %in% calibsites) %>% 
+      unnest(data) %>% 
+      rename(obs = gpp),
+    by = c("sitename", "date")
+  )
+```
+
+```{R}
+library(rbeni)
+df_modobs %>%
+  # ggplot() +
+  # geom_hex(aes(mod, obs))
+  analyse_modobs2("mod", "obs")
+```
+
+```{R}
+df_modobs %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(sitename, doy) %>% 
+  summarise(obs = mean(obs, na.rm = TRUE),
+            mod = mean(mod, na.rm = TRUE)) %>% 
+  ggplot() +
+  geom_line(aes(doy, obs)) +
+  geom_line(aes(doy, mod), color = "red")
+```
+
+### Multi-site
 
 Do evaluation only for sites where simulation was run.
 ```{r}
