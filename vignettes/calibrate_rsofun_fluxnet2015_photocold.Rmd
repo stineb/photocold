@@ -93,7 +93,7 @@ flue_sites <- readr::read_csv( "~/data/flue/flue_stocker18nphyt.csv" ) %>%
 #   dplyr::filter( sitename %in% flue_sites ) %>%
 #   pull(sitename)
 
-calibsites <- "US-Ha1"
+calibsites <- "CH-Lae"
 ```
 
 Use the [ingestr](https://github.com/stineb/ingestr) package once again, now for collecting calibration target data. I.e., GPP based on the nighttime flux decomposition method.
@@ -163,15 +163,9 @@ if (!file.exists(filn) || overwrite){
   set.seed(1982)
   pars <- calib_sofun(
     drivers  = df_drivers_fluxnet2015 %>% 
-      dplyr::filter(sitename %in% calibsites) %>% 
-      mutate(forcing = purrr::map(
-        forcing, 
-        ~{mutate(., year=lubridate::year(date)) %>% filter(year == 2000)})),
+      dplyr::filter(sitename %in% calibsites),
     obs      = ddf_fluxnet_gpp %>% 
-      dplyr::filter(sitename %in% calibsites) %>% 
-      mutate(data = purrr::map(
-        data, 
-        ~{mutate(., year=lubridate::year(date)) %>% filter(year == 2000)})),
+      dplyr::filter(sitename %in% calibsites),
     settings = settings
     )
   saveRDS(pars, file = filn)
@@ -218,9 +212,10 @@ params_modl
 output <- rsofun::runread_pmodel_f(
   df_drivers_fluxnet2015 %>% 
       dplyr::filter(sitename %in% calibsites) %>% 
-      mutate(forcing = purrr::map(
-        forcing, 
-        ~{mutate(., year=lubridate::year(date)) %>% filter(year == 2000)})),
+      mutate(forcing = purrr::map(forcing, 
+                                  ~mutate(., 
+                                          snow = ifelse(temp < 1, prec, 0),
+                                          prec = ifelse(temp < 1, 0, prec)))),
   par = params_modl
   )
 
@@ -229,9 +224,8 @@ saveRDS(output, file = "../data/output_photocold.rds")
 
 ## Run evaluation
 
-### Single site: US-Ha1
+### Single site
 
-(single year)
 ```{r}
 df_modobs <- output %>% 
   filter(sitename %in% calibsites) %>% 
