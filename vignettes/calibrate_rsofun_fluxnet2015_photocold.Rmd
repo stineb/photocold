@@ -15,7 +15,7 @@ library(lubridate)
 ```
 
 
-This workflow is adopted from the benchmarking in sofunBench (at v4.2), see [here](https://github.com/computationales/sofunBench/blob/main/tag_v4.2/benchmark_gpp_FLUXNET2015_ensemble_v4.2.Rmd).
+This was done with rsofun, branch `photocold` at commit `ad1b734fec1e5371212ce767b611cbaaede2b02a`.
 
 ## Load rsofun
 
@@ -93,7 +93,7 @@ flue_sites <- readr::read_csv( "~/data/flue/flue_stocker18nphyt.csv" ) %>%
 #   dplyr::filter( sitename %in% flue_sites ) %>%
 #   pull(sitename)
 
-calibsites <- "CH-Lae"
+calibsites <- "DK-Sor"
 ```
 
 Use the [ingestr](https://github.com/stineb/ingestr) package once again, now for collecting calibration target data. I.e., GPP based on the nighttime flux decomposition method.
@@ -156,7 +156,7 @@ settings <- list(
 ```
 
 Calibrate the model.
-```{r warning=FALSE, message=FALSE, eval=FALSE}
+```{r warning=FALSE, message=FALSE, eval=TRUE}
 overwrite <- TRUE
 filn <- "../data/pars_calib_photocold.rds"
 if (!file.exists(filn) || overwrite){
@@ -176,7 +176,7 @@ if (!file.exists(filn) || overwrite){
 
 The calibrated parameters are returned by `calib_sofun()` as part of the list:
 ```{r}
-# print(pars$par)
+pars
 ```
 
 Update model parameters.
@@ -193,8 +193,6 @@ params_modl <- list(
     kphio_par_d = pars$par[7],
     kphio_par_e = pars$par[8]
   )
-
-params_modl
 ```
 
 
@@ -356,48 +354,48 @@ out_eval$gpp$fluxnet$data$meandoydf_byclim %>%
     )
 ```
 
-#### Drought response
+<!-- #### Drought response -->
 
-```{r message=FALSE, warning=FALSE}
-source("../R/align_events.R")
-source("../R/eval_droughtresponse.R")
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- source("../R/align_events.R") -->
+<!-- source("../R/eval_droughtresponse.R") -->
 
-df_dday_agg <- eval_droughtresponse( 
-  df = out_eval$gpp$fluxnet$data$ddf %>% rename(site = sitename), 
-  path_flue = "~/data/flue/flue_stocker18nphyt.csv",
-  before=20, 
-  after=105,
-  leng_threshold = 10, 
-  nbins=10, 
-  do_norm=TRUE
-  )
+<!-- df_dday_agg <- eval_droughtresponse(  -->
+<!--   df = out_eval$gpp$fluxnet$data$ddf %>% rename(site = sitename),  -->
+<!--   path_flue = "~/data/flue/flue_stocker18nphyt.csv", -->
+<!--   before=20,  -->
+<!--   after=105, -->
+<!--   leng_threshold = 10,  -->
+<!--   nbins=10,  -->
+<!--   do_norm=TRUE -->
+<!--   ) -->
 
-usecol = colorRampPalette( c("wheat3", "white") )( 5 )[2]
+<!-- usecol = colorRampPalette( c("wheat3", "white") )( 5 )[2] -->
 
-df_dday_agg %>% 
-  ggplot() +
-  # annotate("rect", xmin = 0, xmax = 105, ymin = -1.2, ymax = 2.2, alpha = .8, fill = usecol) +
-  geom_hline(yintercept = 0, color = "black", linetype = "dotted") +
-  geom_vline(xintercept = 0, color = "black", linetype = "dotted") +
-  geom_line(
-    aes(x = dday, y = median), size = 0.9) +
-  geom_ribbon(
-    aes(x = dday, ymin = q33, ymax = q66), 
-    alpha = 0.3) +
-  scale_color_manual(values = c("BRC" = "black", "FULL" = "royalblue"), name = "Setup") +
-  scale_fill_manual(values = c("BRC" = "black", "FULL" = "royalblue"), name = "Setup") +
-  ylim(-1.2, 2.2) + xlim(-20, 105) +
-  scale_x_continuous(expand = c(0,0)) + scale_y_continuous(expand = c(0,0)) +
-  labs(x = "Days after drought onset", y = expression( paste( "Bias (g C m"^{-1}, " d"^{-1}, ")")) ) +
-  theme_classic()
-```
+<!-- df_dday_agg %>%  -->
+<!--   ggplot() + -->
+<!--   # annotate("rect", xmin = 0, xmax = 105, ymin = -1.2, ymax = 2.2, alpha = .8, fill = usecol) + -->
+<!--   geom_hline(yintercept = 0, color = "black", linetype = "dotted") + -->
+<!--   geom_vline(xintercept = 0, color = "black", linetype = "dotted") + -->
+<!--   geom_line( -->
+<!--     aes(x = dday, y = median), size = 0.9) + -->
+<!--   geom_ribbon( -->
+<!--     aes(x = dday, ymin = q33, ymax = q66),  -->
+<!--     alpha = 0.3) + -->
+<!--   scale_color_manual(values = c("BRC" = "black", "FULL" = "royalblue"), name = "Setup") + -->
+<!--   scale_fill_manual(values = c("BRC" = "black", "FULL" = "royalblue"), name = "Setup") + -->
+<!--   ylim(-1.2, 2.2) + xlim(-20, 105) + -->
+<!--   scale_x_continuous(expand = c(0,0)) + scale_y_continuous(expand = c(0,0)) + -->
+<!--   labs(x = "Days after drought onset", y = expression( paste( "Bias (g C m"^{-1}, " d"^{-1}, ")")) ) + -->
+<!--   theme_classic() -->
+<!-- ``` -->
 
-## Appendix
+<!-- ## Appendix -->
 
-### Site list
+<!-- ### Site list -->
 
-```{r}
-siteinfo_fluxnet2015 %>% 
-  dplyr::filter(sitename %in% evalsites) %>% 
-  kable()
-```
+<!-- ```{r} -->
+<!-- siteinfo_fluxnet2015 %>%  -->
+<!--   dplyr::filter(sitename %in% evalsites) %>%  -->
+<!--   kable() -->
+<!-- ``` -->
