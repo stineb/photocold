@@ -1,0 +1,125 @@
+---
+title: "Calibrate rsofun with photocold branch"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ingestr)
+library(knitr)
+library(lubridate)
+```
+
+
+## Load data
+
+
+```{r message=FALSE, warning=FALSE}
+load("data/df_daily.RDA") # reads df_final
+
+ddf <- df_final %>% 
+  as_tibble() %>%
+  mutate(doy = lubridate::yday(date)) %>% 
+  mutate(greenup = ifelse(doy > sos & doy < peak, TRUE, FALSE))
+```
+
+```{r}
+visdat::vis_miss(ddf, warn_large_data = FALSE)
+```
+
+PROBLEM: Lots of temperature and VPD data is missing. Make sure to get complete data. Should be available (P-model outputs are available too).
+
+## Mean seasonal cycle
+
+... per site
+```{r}
+df_meandoy <- ddf %>% 
+  group_by(sitename, doy) %>% 
+  summarise(across(starts_with("gpp_"), mean, na.rm = TRUE))
+```
+
+### Plot by site
+
+```{r}
+df_meandoy %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf), names_to = "model", values_to = "gpp") %>% 
+  ggplot() +
+  # geom_ribbon(
+  #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
+  #   fill = "black", 
+  #   alpha = 0.2
+  #   ) +
+  geom_line(aes(x = doy, y = gpp, color = model), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  facet_wrap( ~sitename, ncol = 3 ) +    # , labeller = labeller(climatezone = list_rosetta)
+  theme_gray() +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Model: ",
+    values=c("red", "black", "royalblue", "darkgoldenrod")
+    )
+
+ggsave("fig/gpp_meandoy.pdf", height = 25, width = 8)
+```
+
+## Normalise to peak season
+
+... by site, using the upper 25% quantile.
+```{r}
+norm_to_peak <- function(df, mod, obs){
+  
+  q75_obs <- quantile(df[[obs]], probs = 0.75, na.rm = TRUE)
+  q75_mod <- quantile(df[[mod]], probs = 0.75, na.rm = TRUE)
+  
+  ## normalise mod
+  df[[mod]] <- df[[mod]] * 
+    mean(df[[obs]][df[[obs]]>q75_obs], na.rm = TRUE) / 
+    mean(df[[mod]][df[[mod]]>q75_mod], na.rm = TRUE)
+  
+  return(df)
+}
+
+ddf_norm <- ddf %>% 
+  group_by(sitename) %>% 
+  nest() %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_pmodel", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_bess", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_rf", "gpp_obs"))) %>% 
+  unnest(data)
+```
+
+### Plot normalised by site 
+
+```{r}
+df_meandoy_norm <- ddf_norm %>% 
+  group_by(sitename, doy) %>% 
+  summarise(across(starts_with("gpp_"), mean, na.rm = TRUE))
+```
+
+```{r}
+df_meandoy_norm %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf), names_to = "model", values_to = "gpp") %>% 
+  ggplot() +
+  # geom_ribbon(
+  #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
+  #   fill = "black", 
+  #   alpha = 0.2
+  #   ) +
+  geom_line(aes(x = doy, y = gpp, color = model), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  facet_wrap( ~sitename, ncol = 3, scales = "free_y" ) +
+  theme_gray() +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Model: ",
+    values=c("red", "black", "royalblue", "darkgoldenrod")
+    )
+
+ggsave("fig/gpp_meandoy_norm.pdf", height = 25, width = 8)
+```
