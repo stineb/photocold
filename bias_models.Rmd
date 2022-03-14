@@ -12,6 +12,7 @@ library(tidyverse)
 library(ingestr)
 library(knitr)
 library(lubridate)
+library(rbeni)
 ```
 
 
@@ -33,6 +34,46 @@ visdat::vis_miss(ddf, warn_large_data = FALSE)
 
 PROBLEM: Lots of temperature and VPD data is missing. Make sure to get complete data. Should be available (P-model outputs are available too).
 
+## Empirical LUE models
+
+Determine bias of early season bias of empirical LUE models by fitting models outside greenup period.
+
+```{r}
+ddf <- ddf %>% 
+  mutate(lue = gpp_obs / (fapar * ppfd)) %>% 
+  mutate(lue = remove_outliers(lue))
+
+## take mean LUE for constant-LUE model
+mod_constlue <- ddf %>% 
+  filter(!greenup) %>% 
+  pull(lue) %>% 
+  mean(., na.rm = TRUE)
+  
+## LUE as a linear function of temp and vpd
+mod_lue_temp_vpd <- lm(lue ~ temp + vpd, 
+                       data = ddf %>% 
+                         filter(!greenup))
+ddf <- ddf %>% 
+  mutate(lue_temp_vpd = predict(mod_lue_temp_vpd, newdata = .)) %>% 
+  mutate(gpp_temp_vpd = lue_temp_vpd * fapar * ppfd,
+         gpp_lue_const = mod_constlue * fapar * ppfd)
+```
+
+Compare models
+```{r}
+## P-model
+ddf %>% 
+  analyse_modobs2("gpp_pmodel", "gpp_obs", type = "hex")
+
+## constant LUE model
+ddf %>% 
+  analyse_modobs2("gpp_lue_const", "gpp_obs", type = "hex")
+
+## LUE ~ temp + VPD model
+ddf %>% 
+  analyse_modobs2("gpp_temp_vpd", "gpp_obs", type = "hex")
+```
+
 ## Mean seasonal cycle
 
 ... per site
@@ -44,9 +85,9 @@ df_meandoy <- ddf %>%
 
 ### Plot by site
 
-```{r}
+```{r, out.height="500%"}
 df_meandoy %>% 
-  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf), names_to = "model", values_to = "gpp") %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf, gpp_lue_const, gpp_temp_vpd), names_to = "model", values_to = "gpp") %>% 
   ggplot() +
   # geom_ribbon(
   #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
@@ -58,11 +99,11 @@ df_meandoy %>%
        x = "DOY") +
   facet_wrap( ~sitename, ncol = 3 ) +    # , labeller = labeller(climatezone = list_rosetta)
   theme_gray() +
-  theme(legend.position = "bottom") +
-  scale_color_manual(
-    name="Model: ",
-    values=c("red", "black", "royalblue", "darkgoldenrod")
-    )
+  theme(legend.position = "bottom")
+  # scale_color_manual(
+  #   name="Model: ",
+  #   values=c("red", "black", "royalblue", "darkgoldenrod", "springgreen", "orchid4")
+  #   )
 
 ggsave("fig/gpp_meandoy.pdf", height = 25, width = 8)
 ```
@@ -79,7 +120,7 @@ norm_to_peak <- function(df, mod, obs){
   ## normalise mod
   df[[mod]] <- df[[mod]] * 
     mean(df[[obs]][df[[obs]]>q75_obs], na.rm = TRUE) / 
-    mean(df[[mod]][df[[mod]]>q75_mod], na.rm = TRUE)
+    mean(df[[mod]][df[[obs]]>q75_obs], na.rm = TRUE)
   
   return(df)
 }
@@ -90,6 +131,8 @@ ddf_norm <- ddf %>%
   mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_pmodel", "gpp_obs"))) %>% 
   mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_bess", "gpp_obs"))) %>% 
   mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_rf", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_lue_const", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_temp_vpd", "gpp_obs"))) %>% 
   unnest(data)
 ```
 
@@ -101,9 +144,9 @@ df_meandoy_norm <- ddf_norm %>%
   summarise(across(starts_with("gpp_"), mean, na.rm = TRUE))
 ```
 
-```{r}
+```{r, out.height="500%"}
 df_meandoy_norm %>% 
-  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf), names_to = "model", values_to = "gpp") %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf, gpp_lue_const, gpp_temp_vpd), names_to = "model", values_to = "gpp") %>% 
   ggplot() +
   # geom_ribbon(
   #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
@@ -115,11 +158,12 @@ df_meandoy_norm %>%
        x = "DOY") +
   facet_wrap( ~sitename, ncol = 3, scales = "free_y" ) +
   theme_gray() +
-  theme(legend.position = "bottom") +
-  scale_color_manual(
-    name="Model: ",
-    values=c("red", "black", "royalblue", "darkgoldenrod")
-    )
+  theme(legend.position = "bottom")
+  # scale_color_manual(
+  #   name="Model: ",
+  #   values=c("red", "black", "royalblue", "darkgoldenrod", "springgreen", "orchid4")
+  #   )
 
 ggsave("fig/gpp_meandoy_norm.pdf", height = 25, width = 8)
 ```
+
