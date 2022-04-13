@@ -75,7 +75,10 @@ tmp %>%
 #                               droplevels()
 #                          )
 
-mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 1) + log(vpd) + (1|sitename),
+saveRDS(tmp, file = "../data/test_for_keith.rds")
+
+tmp <- readRDS("../data/test_for_keith.rds")
+mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 1) + log(vpd) + (1|sitename/year),
                             family = Gamma(link = "log"),
                             control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
                             data = tmp %>%
