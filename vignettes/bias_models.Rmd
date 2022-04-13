@@ -53,6 +53,7 @@ mod_lue_temp_vpd <- lm(lue ~ temp + vpd,
                          filter(!greenup))
 
 library(lme4)
+
 ## mixed effects model
 tmp <- ingestr::siteinfo_fluxnet2015 %>%
   select(sitename, elv) %>%
@@ -63,11 +64,28 @@ tmp %>%
   select(lue, temp, vpd, sitename, greenup) %>%
   visdat::vis_miss()
 
-mod_lue_temp_vpd <- lmer(lue ~  poly(temp, 2) + log(vpd) + (1|sitename/year),
+# mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 2) + log(vpd) + (1|sitename/year),
+#                             family = Gamma(link = "log"),
+#                             control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+#                             data = tmp %>%
+#                               filter(!greenup) %>%
+#                               select(lue, temp, vpd, sitename, year, greenup) %>%
+#                               drop_na() %>% 
+#                               filter(!is.infinite(lue) & !is.nan(lue)) %>% 
+#                               droplevels()
+#                          )
+
+mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 1) + log(vpd) + (1|sitename),
+                            family = Gamma(link = "log"),
+                            control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
                             data = tmp %>%
                               filter(!greenup) %>%
                               select(lue, temp, vpd, sitename, year, greenup) %>%
-                              drop_na()
+                              drop_na() %>% 
+                              filter(!is.infinite(lue) & !is.nan(lue)) %>% 
+                              filter(!is.infinite(temp) & !is.nan(temp)) %>% 
+                              filter(!is.infinite(vpd) & !is.nan(vpd)) %>% 
+                              droplevels()
                          )
 
 ddf <- ddf %>% 
