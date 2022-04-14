@@ -13,6 +13,7 @@ library(ingestr)
 library(knitr)
 library(lubridate)
 library(rbeni)
+library(lme4)
 ```
 
 ## Load data
@@ -52,17 +53,15 @@ mod_lue_temp_vpd <- lm(lue ~ temp + vpd,
                        data = ddf %>% 
                          filter(!greenup))
 
-library(lme4)
-
-## mixed effects model
-tmp <- ingestr::siteinfo_fluxnet2015 %>%
+## add year and elevation mixed effects model
+ddf <- ingestr::siteinfo_fluxnet2015 %>%
   select(sitename, elv) %>%
   right_join(ddf, by = "sitename") %>%
   mutate(year = lubridate::year(date))
 
-tmp %>%
-  select(lue, temp, vpd, sitename, greenup) %>%
-  visdat::vis_miss()
+# tmp %>%
+#   select(lue, temp, vpd, sitename, greenup) %>%
+#   visdat::vis_miss()
 
 # mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 2) + log(vpd) + (1|sitename/year),
 #                             family = Gamma(link = "log"),
@@ -75,26 +74,57 @@ tmp %>%
 #                               droplevels()
 #                          )
 
-saveRDS(tmp, file = "../data/test_for_keith.rds")
+# saveRDS(tmp, file = "../data/test_for_keith.rds")
+# tmp <- readRDS("../data/test_for_keith.rds")
 
-tmp <- readRDS("../data/test_for_keith.rds")
-mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 1) + log(vpd) + (1|sitename/year),
-                            family = Gamma(link = "log"),
-                            control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
-                            data = tmp %>%
-                              filter(!greenup) %>%
-                              select(lue, temp, vpd, sitename, year, greenup) %>%
-                              drop_na() %>% 
-                              filter(!is.infinite(lue) & !is.nan(lue)) %>% 
-                              filter(!is.infinite(temp) & !is.nan(temp)) %>% 
-                              filter(!is.infinite(vpd) & !is.nan(vpd)) %>% 
-                              droplevels()
-                         )
+tmp <- ddf %>% 
+  filter(!greenup) %>%
+  filter(ppfd > 5) %>% 
+  select(lue, temp, vpd, sitename, year) %>%
+  drop_na() %>% 
+  filter(!is.infinite(lue) & !is.nan(lue)) %>% 
+  filter(!is.infinite(temp) & !is.nan(temp)) %>% 
+  filter(!is.infinite(vpd) & !is.nan(vpd)) %>% 
+  filter(vpd > 0 & lue > 0) %>% 
+  droplevels()
+
+mod_glmer <- glmer(lue ~ poly(temp, 2) + log(vpd) + (1|sitename),   # + (1|sitename/year)
+                   family = Gamma(link = "log"),
+                   control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+                   data = tmp
+                   )
+
+# vr <- visreg(mod_lue_temp_vpd, 
+#              "temp", 
+#              type = "conditional", 
+#              trans = exp, 
+#              rug = T, 
+#              partial = T,
+#              points = list(pch = 1, cex = 1.0),
+#              line = list(lty = 1, col = "red"),
+#              ylab = " ",  
+#              yaxt = 'n', # suppress the tick-marks within the plot function; we set these with axis()
+#              xlab = "Temp.", 
+#              cex.axis = 1.2, 
+#              cex.lab = 1.4,
+#              main = "Empirical", 
+#              fg = "green"
+#              )
+# axis(side = 2, at = aty, labels = T, las = 1, col = rgb(0.1, 0.5, 0.1))
+# rect(-2, -1, 32, 1, col = rgb(0.1, 0.5, 0.1, alpha=0.1), border = FALSE) # highlight our empirical panel
+# 
+# ggplot(data = vr$fit, aes(temp, visregFit)) +
+#   geom_hex(data = vr$res, aes(temp, visregRes)) +
+#   geom_line(colour = 'red', size = 1 ) +
+#   geom_ribbon(aes(ymin = visregLwr, ymax = visregUpr), alpha = 0.3) +
+#   xlab('Temperature') +
+#   ylab('LUE') +
+#   theme_classic()
 
 ddf <- ddf %>% 
-  mutate(lue_temp_vpd = predict(mod_lue_temp_vpd, newdata = .)) %>% 
-  mutate(gpp_temp_vpd = lue_temp_vpd * fapar * ppfd,
-         gpp_lue_const = mod_constlue * fapar * ppfd)
+  mutate(lue_glmer = predict(mod_glmer, newdata = ., re.form = NULL)) %>% 
+  mutate(gpp_glmer = lue_glmer * fapar * ppfd) %>% 
+  mutate(gpp_lue_const = mod_constlue * fapar * ppfd)
 ```
 
 <!-- ## Bloomfield et al. LUE model -->
@@ -124,7 +154,7 @@ ddf %>%
 
 ## LUE ~ temp + VPD model
 ddf %>% 
-  analyse_modobs2("gpp_temp_vpd", "gpp_obs", type = "hex")
+  analyse_modobs2("gpp_glmer", "gpp_obs", type = "hex")
 ```
 
 ## Mean seasonal cycle
@@ -141,9 +171,9 @@ df_meandoy <- ddf %>%
 
 ```{r, out.height="500%"}
 df_meandoy %>% 
-  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_bf, gpp_rf, gpp_lue_const, gpp_temp_vpd), names_to = "model", values_to = "gpp") %>% 
-  mutate(model = fct_relevel(model, "gpp_obs", "gpp_pmodel", "gpp_bf", "gpp_rf", "gpp_bess", "gpp_lue_const", "gpp_temp_vpd")) %>% 
-  dplyr::filter((model %in% c( "gpp_obs", "gpp_pmodel", "gpp_temp_vpd"))) %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf, gpp_lue_const), names_to = "model", values_to = "gpp") %>% 
+  mutate(model = fct_relevel(model, "gpp_obs", "gpp_pmodel", "gpp_glmer", "gpp_rf", "gpp_bess", "gpp_lue_const")) %>% 
+  dplyr::filter((model %in% c( "gpp_obs", "gpp_pmodel", "gpp_glmer"))) %>% 
   ggplot() +
   # geom_ribbon(
   #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
