@@ -27,7 +27,7 @@ ddf <- df_final %>%
   mutate(greenup = ifelse(doy > sos & doy < peak, TRUE, FALSE))
 ```
 
-```{r}
+```{r eval=FALSE}
 visdat::vis_miss(ddf, warn_large_data = FALSE)
 ```
 
@@ -80,7 +80,7 @@ ddf <- ingestr::siteinfo_fluxnet2015 %>%
 tmp <- ddf %>% 
   filter(!greenup) %>%
   filter(ppfd > 5) %>% 
-  select(lue, temp, vpd, sitename, year) %>%
+  select(sitename, date, year, lue, temp, vpd, fapar, ppfd, gpp_obs) %>%
   drop_na() %>% 
   filter(!is.infinite(lue) & !is.nan(lue)) %>% 
   filter(!is.infinite(temp) & !is.nan(temp)) %>% 
@@ -121,25 +121,32 @@ mod_glmer <- glmer(lue ~ poly(temp, 2) + log(vpd) + (1|sitename),   # + (1|siten
 #   ylab('LUE') +
 #   theme_classic()
 
+tmp <- tmp %>% 
+  mutate(lue_glmer = predict(mod_glmer, newdata = ., re.form = NULL)) %>% 
+  mutate(gpp_glmer = lue_glmer * fapar * ppfd)
+
+tmp %>%
+  analyse_modobs2("gpp_glmer", "gpp_obs")
+
 ddf <- ddf %>% 
   mutate(lue_glmer = predict(mod_glmer, newdata = ., re.form = NULL)) %>% 
   mutate(gpp_glmer = lue_glmer * fapar * ppfd) %>% 
   mutate(gpp_lue_const = mod_constlue * fapar * ppfd)
 ```
 
-<!-- ## Bloomfield et al. LUE model -->
+## Bloomfield et al. LUE model
 
-<!-- ```{r} -->
-<!-- df_bf <- read_csv("~/data/bloomfield_LUE/dataset_with-predictions.csv") -->
+```{r}
+df_bf <- read_csv("~/data/bloomfield_LUE/dataset_with-predictions.csv")
 
-<!-- ddf <- df_bf %>%  -->
-<!--   mutate(gpp_bf = M_fit * Iabs_sum) %>%  -->
-<!--   select(sitename, date, gpp_bf) %>%  -->
-<!--   right_join(ddf, by = c("sitename", "date")) -->
+ddf <- df_bf %>%
+  mutate(gpp_bf = M_fit * Iabs_sum) %>%
+  select(sitename, date, gpp_bf) %>%
+  right_join(ddf, by = c("sitename", "date"))
 
-<!-- ddf %>%  -->
-<!--   analyse_modobs2("gpp_bf", "gpp_obs") -->
-<!-- ``` -->
+ddf %>%
+  analyse_modobs2("gpp_bf", "gpp_obs")
+```
 
 Compare models
 
