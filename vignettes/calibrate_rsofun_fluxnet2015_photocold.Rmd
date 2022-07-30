@@ -1,0 +1,468 @@
+---
+title: "Calibrate rsofun with photocold branch"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ingestr)
+library(knitr)
+library(lubridate)
+```
+
+
+This workflow is adopted from the benchmarking in sofunBench (at v4.2), see [here](https://github.com/computationales/sofunBench/blob/main/tag_v4.2/benchmark_gpp_FLUXNET2015_ensemble_v4.2.Rmd).
+
+## Load data
+
+Get rsofun, photocold branch, and install it.
+```{r message=FALSE, warning=FALSE}
+# devtools::install_github("computationales/rsofun@v4.2")
+library(rsofun)
+source("~/photocold/R/wrap_calib_photocold.R")
+```
+
+Short version using function
+```{r}
+## Get model forcing
+load("~/data/rsofun_benchmarking/df_drivers_fluxnet2015.Rdata")
+
+df_drivers_fluxnet2015 <- df_drivers_fluxnet2015 %>% 
+  dplyr::select(sitename, forcing) %>% 
+  unnest(forcing) %>% 
+  dplyr::filter(!(month(date)==2 & mday(date)==29)) %>% 
+  
+  ## model requires flux per seconds now
+  mutate(prec = prec / (60*60*24), ppfd = ppfd / (60*60*24)) %>% 
+  
+  ## assuming all precipitation in liquid form
+  mutate(rainf = prec, snowf = 0) %>% 
+  
+  ## required for new version, but not used because   
+  mutate(tmin = temp, tmax = temp) %>% 
+  
+  group_by(sitename) %>% 
+  nest() %>%
+  rename(forcing = data) %>% 
+  right_join(
+    df_drivers_fluxnet2015 %>% 
+      dplyr::select(-forcing),
+    by = "sitename"
+  ) %>% 
+  ungroup() %>% 
+  rename(site_info = siteinfo, params_soil = df_soiltexture)
+
+## change name to make compatible
+df_drivers_fluxnet2015 <- df_drivers_fluxnet2015 %>% 
+  mutate(forcing = purrr::map(forcing, ~rename(., rain = rainf, snow = snowf)))
+
+## Get observational data as calibration target
+filn <- "~/data/rsofun_benchmarking/ddf_fluxnet_gpp.Rdata"
+if (!file.exists(filn)){
+  settings_ingestr_fluxnet <- list(
+    dir_hh = "~/data/FLUXNET-2015_Tier1/20191024/HH/", 
+    getswc = FALSE,
+    filter_ntdt = TRUE,
+    threshold_GPP = 0.8,
+    remove_neg = FALSE
+  )
+  
+  ddf_fluxnet_gpp <- ingestr::ingest(
+    siteinfo = siteinfo_fluxnet2015 %>% 
+      dplyr::filter(sitename %in% calibsites),
+    source    = "fluxnet",
+    getvars = list(gpp = "GPP_NT_VUT_REF",
+                   gpp_unc = "GPP_NT_VUT_SE"),
+    dir = "~/data/FLUXNET-2015_Tier1/20191024/DD/",
+    settings = settings_ingestr_fluxnet,
+    timescale = "d"
+  )
+  save(ddf_fluxnet_gpp, file = filn)
+} else {
+  load(filn)
+}
+```
+
+## Settings
+
+```{r}
+## Calibration settings
+settings <- list(
+  method      = "bayesiantools",
+  targetvars  = c("gpp"),
+  timescale   = list(targets_obs = "y"),
+  metric      = cost_mse_photocold,
+  dir_results = "./",
+  name        = "photocold",
+  
+  control     = list(
+    sampler = "DEzs",
+    settings = list(
+      burnin = 1500,
+      iterations = 5000
+    )),
+  
+  par = list(
+    kphio       = list(lower=0.03, upper=0.2,  init = 0.09),
+    
+    soilm_par_a = list(lower=0.00, upper=1.0,  init = 0.33),
+    soilm_par_b = list(lower=0.00, upper=10.0, init = 1.5),
+    
+    kphio_par_a = list(lower=-10,  upper=10,   init = 5.00),
+    kphio_par_b = list(lower=0.1,  upper=10.0, init = 0.50),
+    
+    kphio_par_c = list(lower=1,    upper=200,  init = 50.0),
+    kphio_par_d = list(lower=0.01, upper=10,   init = 0.1),
+    kphio_par_e = list(lower=0   , upper=10,   init = 5)
+  )
+)
+```
+
+
+## Calibrate by sites
+
+```{r}
+## my own site selection
+df_sites <- ingestr::siteinfo_fluxnet2015 %>% 
+  filter(sitename %in% df_drivers_fluxnet2015$sitename) %>% 
+  dplyr::filter(koeppen_code %in% c("Cfa", "Cfb", "Cfc", "Dfa", "Dfb", "Dfc", "Dfd") &
+                classid %in% c("MF", "ENF", "DBF", "DNF"))
+vec_sites <- df_sites$sitename
+
+## fit parameters individually per site
+df_params <- purrr::map_dfr(
+  as.list(vec_sites),
+  ~wrap_calib_photocold(
+    .,
+    df_drivers_fluxnet2015,
+    ddf_fluxnet_gpp,
+    settings
+  ))
+
+saveRDS(df_params, file = "~/photocold/data/df_params_level_site.rds")
+```
+
+
+## Site-level climate metrics
+
+```{r}
+## determine sites for which calibration was successful
+use_sites <- df_params %>% 
+  drop_na() %>% 
+  pull(sitename)
+
+## get tmin
+ddf_tmin <- ingest(
+  siteinfo  = siteinfo_fluxnet2015 %>% filter(sitename %in% use_sites),
+  source    = "fluxnet",
+  getvars   = list(tmin = "TMIN_F"),
+  dir       = "~/data/FLUXNET-2015_Tier1/20191024/DD/",  # adjust this with your local path
+  settings  = list(
+    dir_hh = "~/data/FLUXNET-2015_Tier1/20191024/HH/", # adjust this with your local path
+    dir_hr = "~/data/FLUXNET-2015_Tier1/20191024/HH/", # adjust this with your local path
+    getswc = FALSE),
+  timescale = "d",
+  verbose = TRUE
+  )
+
+## add daily mean temperature
+df_meteo <- ddf_tmin %>% 
+  unnest(data) %>% 
+  left_join(
+    df_drivers_fluxnet2015 %>% 
+      select(sitename, forcing) %>% 
+      unnest(forcing) %>% 
+      select(-tmin, -tmax),
+    by = c("sitename", "date")
+  )
+
+## mean seasonal cycle: mean temp, minimum tmin
+df_meandoy <- df_meteo %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(sitename, doy) %>% 
+  summarise(temp = mean(temp, na.rm = TRUE),
+            tmin = min(tmin, na.rm = TRUE))
+
+## get maximum temperature difference between mean and min seasonal cycles 
+df_tdiff <- df_meandoy %>% 
+  filter(doy %in% seq(60:150)) %>% 
+  mutate(tdiff = temp - tmin) %>% 
+  group_by(sitename) %>% 
+  summarise(tdiff = mean(tdiff, na.rm = TRUE))
+```
+
+
+## Analyse correlations
+
+```{r}
+df <- df_params %>% 
+  left_join(
+    df_tdiff,
+    by = "sitename"
+  )
+
+df <- df %>% 
+  left_join(
+    siteinfo_fluxnet2015,
+    by = "sitename"
+  )
+
+df %>% 
+  # mutate(classid = ifelse(classid == "MF", "DBF", classid)) %>%  # group mixed and deciduous forests together
+  ggplot(aes(tdiff, kphio_par_c, color = classid)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_classic()
+
+linmod_dbf <- lm(kphio_par_c ~ tdiff, 
+   data = df %>% 
+     # mutate(classid = ifelse(classid == "MF", "DBF", classid)) %>%  # group mixed and deciduous forests together
+     filter(classid == "DBF") %>% 
+     drop_na() %>% 
+     filter(!is.infinite(tdiff))
+     )
+summary(linmod_dbf)
+
+df %>% 
+  mutate(classid = ifelse(classid == "MF", "DBF", classid)) %>%  # group mixed and deciduous forests together
+  ggplot(aes(classid, kphio_par_c)) +
+  geom_boxplot()
+
+df %>% 
+  mutate(classid = ifelse(classid == "MF", "DBF", classid)) %>%  # group mixed and deciduous forests together
+  ggplot(aes(classid, kphio_par_a)) +
+  geom_boxplot()
+```
+
+
+
+
+## Run model
+
+Update model parameters.
+```{r}
+params_modl <- list(
+    kphio       = pars$par[1],
+    
+    soilm_par_a = pars$par[2],
+    soilm_par_b = pars$par[3],
+    
+    kphio_par_a = pars$par[4],
+    kphio_par_b = pars$par[5],
+    kphio_par_c = pars$par[6],
+    kphio_par_d = pars$par[7],
+    kphio_par_e = pars$par[8]
+  )
+
+params_modl
+```
+
+
+
+<!-- Change variable names after version update. -->
+<!-- ```{r} -->
+<!-- df_drivers_fluxnet2015 <- df_drivers_fluxnet2015 %>%  -->
+<!--   mutate(forcing = purrr::map(forcing, ~rename(., rain = rainf, snow = snowf))) -->
+<!-- ``` -->
+
+`"~/data/rsofun_benchmarking/df_drivers_fluxnet2015_allsites.Rdata"` is prepared by `benchmarking/collect_data/prepare_inputs_FLUXNET2015_allsites.Rmd`.
+
+```{r warning=FALSE, message=FALSE}
+output <- rsofun::runread_pmodel_f(
+  df_drivers_fluxnet2015 %>% 
+      dplyr::filter(sitename %in% calibsites) %>% 
+      mutate(forcing = purrr::map(forcing, 
+                                  ~mutate(., 
+                                          snow = ifelse(temp < 1, prec, 0),
+                                          prec = ifelse(temp < 1, 0, prec)))),
+  par = params_modl
+  )
+
+saveRDS(output, file = "../data/output_photocold.rds")
+```
+
+## Run evaluation
+
+### Single site
+
+```{r}
+df_modobs <- output %>% 
+  filter(sitename %in% calibsites) %>% 
+  select(sitename, data) %>% 
+  unnest(data) %>% 
+  select(sitename, date, mod = gpp) %>% 
+  left_join(
+    ddf_fluxnet_gpp %>% 
+      filter(sitename %in% calibsites) %>% 
+      unnest(data) %>% 
+      rename(obs = gpp),
+    by = c("sitename", "date")
+  )
+```
+
+```{R}
+library(rbeni)
+df_modobs %>%
+  # ggplot() +
+  # geom_hex(aes(mod, obs))
+  analyse_modobs2("mod", "obs")
+
+df_modobs %>% 
+  ggplot() +
+  geom_line(aes(date, obs)) +
+  geom_line(aes(date, mod), color = "red")
+```
+
+```{R}
+df_modobs %>% 
+  mutate(doy = lubridate::yday(date)) %>% 
+  group_by(sitename, doy) %>% 
+  summarise(obs = mean(obs, na.rm = TRUE),
+            mod = mean(mod, na.rm = TRUE)) %>% 
+  ggplot() +
+  geom_line(aes(doy, obs)) +
+  geom_line(aes(doy, mod), color = "red")
+```
+
+### Multi-site
+
+Do evaluation only for sites where simulation was run.
+```{r}
+evalsites <- output %>% 
+  mutate(ntsteps = purrr::map_dbl(data, ~nrow(.))) %>% 
+  dplyr::filter(ntsteps > 0) %>% 
+  pull(sitename)
+```
+
+Load standard benchmarking file with observational data for evaluation.
+```{r}
+load("~/data/rsofun_benchmarking/obs_eval_fluxnet2015.Rdata")
+```
+
+Define evaluation settings.
+```{r}
+settings_eval <- list(
+  benchmark = list( gpp = c("fluxnet") ),
+  sitenames = evalsites,
+  agg       = 8
+  )
+```
+
+And finally run the evaluation.
+```{r warning=FALSE, message=FALSE, error=FALSE}
+source("~/sofunCalVal/R/eval_sofun.R")
+source("~/sofunCalVal/R/get_stats.R")
+filn <- "../out_eval_photocold.rds"
+overwrite <- TRUE
+if (!file.exists(filn) || overwrite){
+  out_eval <- eval_sofun( 
+    output, 
+    settings_eval, 
+    settings_sims, 
+    obs_eval = obs_eval, 
+    overwrite = TRUE, 
+    light = FALSE 
+    )
+  saveRDS(out_eval, file = filn)
+} else {
+  out_eval <- read_rds(filn)
+}
+```
+
+## Evaluation results
+
+### Metrics table
+
+```{r}
+out_eval$gpp$fluxnet$metrics %>% 
+  bind_rows(.id = "Level") %>% 
+  kable
+```
+
+### Visualisations
+
+#### Correlations
+
+```{r message=FALSE, warning=FALSE}
+out_eval$gpp$fluxnet$plot$gg_modobs_xdaily
+out_eval$gpp$fluxnet$plot$gg_modobs_spatial_annual
+```
+
+#### Mean seasonal cycle
+
+```{r message=FALSE, warning=FALSE}
+## plot
+out_eval$gpp$fluxnet$data$meandoydf_byclim %>% 
+  dplyr::filter(climatezone %in% c("Aw south", "BSk north", "Cfa north", "Cfb north", "Cfb south", "Csa north", "Csb north", "Dfb north", "Dfc north")) %>%
+  dplyr::filter(koeppen_code != "-") %>% 
+  pivot_longer(c(obs_mean, mod_mean), names_to = "source", values_to = "gpp") %>% 
+  ggplot() +
+  geom_ribbon(
+    aes(x = doy, ymin = obs_min, ymax = obs_max), 
+    fill = "black", 
+    alpha = 0.2
+    ) +
+  geom_line(aes(x = doy, y = gpp, color = source), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  facet_wrap( ~climatezone ) +    # , labeller = labeller(climatezone = list_rosetta)
+  theme_gray() +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Setup: ",
+    values=c("red", "black")
+    # values=c("FULL" = "#DE1A1A", "Observed" = "black")
+    )
+```
+
+#### Drought response
+
+```{r message=FALSE, warning=FALSE}
+source("../R/align_events.R")
+source("../R/eval_droughtresponse.R")
+
+df_dday_agg <- eval_droughtresponse( 
+  df = out_eval$gpp$fluxnet$data$ddf %>% rename(site = sitename), 
+  path_flue = "~/data/flue/flue_stocker18nphyt.csv",
+  before=20, 
+  after=105,
+  leng_threshold = 10, 
+  nbins=10, 
+  do_norm=TRUE
+  )
+
+usecol = colorRampPalette( c("wheat3", "white") )( 5 )[2]
+
+df_dday_agg %>% 
+  ggplot() +
+  # annotate("rect", xmin = 0, xmax = 105, ymin = -1.2, ymax = 2.2, alpha = .8, fill = usecol) +
+  geom_hline(yintercept = 0, color = "black", linetype = "dotted") +
+  geom_vline(xintercept = 0, color = "black", linetype = "dotted") +
+  geom_line(
+    aes(x = dday, y = median), size = 0.9) +
+  geom_ribbon(
+    aes(x = dday, ymin = q33, ymax = q66), 
+    alpha = 0.3) +
+  scale_color_manual(values = c("BRC" = "black", "FULL" = "royalblue"), name = "Setup") +
+  scale_fill_manual(values = c("BRC" = "black", "FULL" = "royalblue"), name = "Setup") +
+  ylim(-1.2, 2.2) + xlim(-20, 105) +
+  scale_x_continuous(expand = c(0,0)) + scale_y_continuous(expand = c(0,0)) +
+  labs(x = "Days after drought onset", y = expression( paste( "Bias (g C m"^{-1}, " d"^{-1}, ")")) ) +
+  theme_classic()
+```
+
+## Appendix
+
+### Site list
+
+```{r}
+siteinfo_fluxnet2015 %>% 
+  dplyr::filter(sitename %in% evalsites) %>% 
+  kable()
+```
