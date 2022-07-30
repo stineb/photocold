@@ -1,0 +1,265 @@
+---
+title: "Calibrate rsofun with photocold branch"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ingestr)
+library(knitr)
+library(lubridate)
+library(rbeni)
+library(lme4)
+```
+
+## Load data
+
+```{r message=FALSE, warning=FALSE}
+load("../data/df_daily.RDA") # reads df_final
+
+ddf <- df_final %>% 
+  as_tibble() %>%
+  mutate(doy = lubridate::yday(date)) %>% 
+  mutate(greenup = ifelse(doy > sos & doy < peak, TRUE, FALSE))
+```
+
+```{r eval=FALSE}
+visdat::vis_miss(ddf, warn_large_data = FALSE)
+```
+
+PROBLEM: Lots of temperature and VPD data is missing. Make sure to get complete data. Should be available (P-model outputs are available too).
+
+## Empirical LUE models
+
+Determine bias of early season bias of empirical LUE models by fitting models outside greenup period.
+
+```{r}
+ddf <- ddf %>% 
+  mutate(lue = gpp_obs / (fapar * ppfd)) %>% 
+  mutate(lue = remove_outliers(lue))
+
+## take mean LUE for constant-LUE model
+mod_constlue <- ddf %>% 
+  filter(!greenup) %>% 
+  pull(lue) %>% 
+  mean(., na.rm = TRUE)
+  
+## LUE as a linear function of temp and vpd
+mod_lue_temp_vpd <- lm(lue ~ temp + vpd, 
+                       data = ddf %>% 
+                         filter(!greenup))
+
+## add year and elevation mixed effects model
+ddf <- ingestr::siteinfo_fluxnet2015 %>%
+  select(sitename, elv) %>%
+  right_join(ddf, by = "sitename") %>%
+  mutate(year = lubridate::year(date))
+
+# tmp %>%
+#   select(lue, temp, vpd, sitename, greenup) %>%
+#   visdat::vis_miss()
+
+# mod_lue_temp_vpd <- glmer(lue ~  poly(temp, 2) + log(vpd) + (1|sitename/year),
+#                             family = Gamma(link = "log"),
+#                             control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+#                             data = tmp %>%
+#                               filter(!greenup) %>%
+#                               select(lue, temp, vpd, sitename, year, greenup) %>%
+#                               drop_na() %>% 
+#                               filter(!is.infinite(lue) & !is.nan(lue)) %>% 
+#                               droplevels()
+#                          )
+
+# saveRDS(tmp, file = "../data/test_for_keith.rds")
+# tmp <- readRDS("../data/test_for_keith.rds")
+
+tmp <- ddf %>% 
+  filter(!greenup) %>%
+  filter(ppfd > 5) %>% 
+  select(sitename, date, year, lue, temp, vpd, fapar, ppfd, gpp_obs) %>%
+  drop_na() %>% 
+  filter(!is.infinite(lue) & !is.nan(lue)) %>% 
+  filter(!is.infinite(temp) & !is.nan(temp)) %>% 
+  filter(!is.infinite(vpd) & !is.nan(vpd)) %>% 
+  filter(vpd > 0 & lue > 0) %>% 
+  droplevels()
+
+mod_glmer <- glmer(lue ~ poly(temp, 2) + log(vpd) + (1|sitename),   # + (1|sitename/year)
+                   family = Gamma(link = "log"),
+                   control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5)),
+                   data = tmp
+                   )
+
+# vr <- visreg(mod_lue_temp_vpd, 
+#              "temp", 
+#              type = "conditional", 
+#              trans = exp, 
+#              rug = T, 
+#              partial = T,
+#              points = list(pch = 1, cex = 1.0),
+#              line = list(lty = 1, col = "red"),
+#              ylab = " ",  
+#              yaxt = 'n', # suppress the tick-marks within the plot function; we set these with axis()
+#              xlab = "Temp.", 
+#              cex.axis = 1.2, 
+#              cex.lab = 1.4,
+#              main = "Empirical", 
+#              fg = "green"
+#              )
+# axis(side = 2, at = aty, labels = T, las = 1, col = rgb(0.1, 0.5, 0.1))
+# rect(-2, -1, 32, 1, col = rgb(0.1, 0.5, 0.1, alpha=0.1), border = FALSE) # highlight our empirical panel
+# 
+# ggplot(data = vr$fit, aes(temp, visregFit)) +
+#   geom_hex(data = vr$res, aes(temp, visregRes)) +
+#   geom_line(colour = 'red', size = 1 ) +
+#   geom_ribbon(aes(ymin = visregLwr, ymax = visregUpr), alpha = 0.3) +
+#   xlab('Temperature') +
+#   ylab('LUE') +
+#   theme_classic()
+
+tmp <- tmp %>% 
+  mutate(lue_glmer = predict(mod_glmer, newdata = ., re.form = NULL)) %>% 
+  mutate(gpp_glmer = lue_glmer * fapar * ppfd)
+
+tmp %>%
+  analyse_modobs2("gpp_glmer", "gpp_obs")
+
+ddf <- ddf %>% 
+  mutate(lue_glmer = predict(mod_glmer, newdata = ., re.form = NULL)) %>% 
+  mutate(gpp_glmer = lue_glmer * fapar * ppfd) %>% 
+  mutate(gpp_lue_const = mod_constlue * fapar * ppfd)
+```
+
+## Bloomfield et al. LUE model
+
+```{r}
+df_bf <- read_csv("~/data/bloomfield_LUE/dataset_with-predictions.csv")
+
+ddf <- df_bf %>%
+  mutate(gpp_bf = M_fit * Iabs_sum) %>%
+  select(sitename, date, gpp_bf) %>%
+  right_join(ddf, by = c("sitename", "date"))
+
+ddf %>%
+  analyse_modobs2("gpp_bf", "gpp_obs")
+```
+
+Compare models
+
+```{r}
+## P-model
+ddf %>% 
+  analyse_modobs2("gpp_pmodel", "gpp_obs", type = "hex")
+
+## constant LUE model
+ddf %>% 
+  analyse_modobs2("gpp_lue_const", "gpp_obs", type = "hex")
+
+## LUE ~ temp + VPD model
+ddf %>% 
+  analyse_modobs2("gpp_glmer", "gpp_obs", type = "hex")
+```
+
+## Mean seasonal cycle
+
+... per site
+
+```{r}
+df_meandoy <- ddf %>% 
+  group_by(sitename, doy) %>% 
+  summarise(across(starts_with("gpp_"), mean, na.rm = TRUE))
+```
+
+### Plot by site
+
+```{r, out.height="500%"}
+df_meandoy %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf, gpp_lue_const), names_to = "model", values_to = "gpp") %>% 
+  mutate(model = fct_relevel(model, "gpp_obs", "gpp_pmodel", "gpp_glmer", "gpp_rf", "gpp_bess", "gpp_lue_const")) %>% 
+  dplyr::filter((model %in% c( "gpp_obs", "gpp_pmodel", "gpp_glmer"))) %>% 
+  ggplot() +
+  # geom_ribbon(
+  #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
+  #   fill = "black", 
+  #   alpha = 0.2
+  #   ) +
+  geom_line(aes(x = doy, y = gpp, color = model), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  facet_wrap( ~sitename, ncol = 3 ) +    # , labeller = labeller(climatezone = list_rosetta)
+  theme_gray() +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Model: ",
+    values=c("black", "red", "royalblue", "darkgoldenrod", "springgreen", "orchid4")
+    )
+
+ggsave("../fig/gpp_meandoy.pdf", height = 25, width = 8)
+```
+
+## Normalise to peak season
+
+... by site, using the upper 25% quantile.
+
+```{r}
+norm_to_peak <- function(df, mod, obs){
+  
+  q75_obs <- quantile(df[[obs]], probs = 0.75, na.rm = TRUE)
+  q75_mod <- quantile(df[[mod]], probs = 0.75, na.rm = TRUE)
+  
+  ## normalise mod
+  df[[mod]] <- df[[mod]] * 
+    mean(df[[obs]][df[[obs]]>q75_obs], na.rm = TRUE) / 
+    mean(df[[mod]][df[[obs]]>q75_obs], na.rm = TRUE)
+  
+  return(df)
+}
+
+ddf_norm <- ddf %>% 
+  group_by(sitename) %>% 
+  nest() %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_pmodel", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_bess", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_rf", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_bf", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_lue_const", "gpp_obs"))) %>% 
+  mutate(data = purrr::map(data, ~norm_to_peak(., "gpp_temp_vpd", "gpp_obs"))) %>% 
+  unnest(data)
+```
+
+### Plot normalised by site
+
+```{r}
+df_meandoy_norm <- ddf_norm %>% 
+  group_by(sitename, doy) %>% 
+  summarise(across(starts_with("gpp_"), mean, na.rm = TRUE))
+```
+
+```{r, out.height="500%"}
+df_meandoy_norm %>% 
+  pivot_longer(c(gpp_obs, gpp_pmodel, gpp_bess, gpp_rf, gpp_lue_const, gpp_temp_vpd), names_to = "model", values_to = "gpp") %>% 
+  mutate(model = fct_relevel(model, "gpp_obs", "gpp_pmodel", "gpp_bf", "gpp_rf", "gpp_bess", "gpp_lue_const", "gpp_temp_vpd")) %>% 
+  dplyr::filter((model %in% c( "gpp_obs", "gpp_pmodel", "gpp_temp_vpd"))) %>% 
+  ggplot() +
+  # geom_ribbon(
+  #   aes(x = doy, ymin = obs_min, ymax = obs_max), 
+  #   fill = "black", 
+  #   alpha = 0.2
+  #   ) +
+  geom_line(aes(x = doy, y = gpp, color = model), size = 0.4) +
+  labs(y = expression( paste("Simulated GPP (g C m"^-2, " d"^-1, ")" ) ), 
+       x = "DOY") +
+  facet_wrap( ~sitename, ncol = 3, scales = "free_y" ) +
+  theme_gray() +
+  theme(legend.position = "bottom") +
+  scale_color_manual(
+    name="Model: ",
+    values=c("black", "red", "royalblue", "darkgoldenrod", "springgreen", "orchid4")
+    )
+
+ggsave("../fig/gpp_meandoy_norm.pdf", height = 25, width = 8)
+```

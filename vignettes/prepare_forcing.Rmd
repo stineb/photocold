@@ -18,40 +18,189 @@ library(ingestr)
 df_sites <- read_csv(file = "../data/df_sites.csv")
 ```
 
+## MODIS
+
+```{r eval = FALSE}
+filn <- "../data/df_modis_fpar.rds"
+if (!file.exists(filn)){
+  settings_modis <- get_settings_modis(
+    bundle            = "modis_fpar",
+    data_path         = "~/data/modis_subsets/",
+    method_interpol   = "linear",    # is more robust than other methods against values below 0 and above 1
+    network = c("fluxnet", "icos"),
+    keep              = TRUE,
+    overwrite_raw     = FALSE,
+    overwrite_interpol= TRUE,
+    n_focal           = 0
+    )
+  
+  df_modis_fpar <- ingest(
+    df_sites,
+    source = "modis",
+    settings = settings_modis,
+    parallel = FALSE,
+    ncores = 1
+    )
+  
+  saveRDS(df_modis_fpar, file = filn)
+    
+} else {
+  df_modis_fpar <- read_rds(filn)
+}
+```
+
+Check data availability. Must not have any missing.
+```{r}
+visdat::vis_miss(df_modis_fpar %>% unnest(data), cluster = FALSE, warn_large_data = FALSE)
+```
+
+Determine MODIS-era for each site based on years for which data from all days are available.
+```{r}
+## determine year_start as firs year for which all data is available
+get_year_start <- function(df){
+  years <- df %>% 
+    mutate(year = lubridate::year(date),
+           avl_fapar = !is.na(modisvar_filled)) %>% 
+    group_by(year) %>% 
+    summarise(avl_fapar = sum(avl_fapar)) %>% 
+    dplyr::filter(avl_fapar >= 365) %>% 
+    pull(year)
+  if (length(years)==0){
+    return(NA)
+  } else {
+    return(min(as.integer(years)))
+  }
+}
+get_year_end <- function(df){
+  years <- df %>% 
+    mutate(year = lubridate::year(date),
+           avl_fapar = !is.na(modisvar_filled)) %>% 
+    group_by(year) %>% 
+    summarise(avl_fapar = sum(avl_fapar)) %>% 
+    dplyr::filter(avl_fapar >= 365) %>% 
+    pull(year)
+  if (length(years)==0){
+    return(NA)
+  } else {
+    return(max(as.integer(years)))
+  }
+}
+
+df_sites_modis <- df_modis_fpar %>% 
+  mutate(year_start = purrr::map_int(data, ~get_year_start(.)),
+         year_end = purrr::map_int(data, ~get_year_end(.))) %>% 
+  dplyr::select(-data)
+```
+
+Update site meta info data based on available modis years. For some sites, no MODIS data covering at least one full year is available. Drop them. This leaves 45 sites.
+```{r}
+df_sites_modis_era <- df_sites %>% 
+  dplyr::select(-year_start, -year_end) %>% 
+  left_join(
+    df_sites_modis,
+    by = "sitename"
+  ) %>% 
+  drop_na(year_start, year_end)
+
+saveRDS(df_sites_modis_era, file = "../data/df_sites_modis_era.csv")
+```
+
+Drop data for which site/year is not complete.
+```{r}
+df_modis_fpar <- df_modis_fpar %>% 
+  left_join(df_sites_modis_era %>% 
+              dplyr::select(sitename, year_start, year_end), 
+            by = "sitename"
+            ) %>% 
+  unnest(data) %>% 
+  mutate(year = lubridate::year(date)) %>% 
+  mutate(keep = ifelse(year>= year_start & year <= year_end, TRUE, FALSE)) %>% 
+  dplyr::filter(keep) %>% 
+  dplyr::select(-keep) %>% 
+  group_by(sitename) %>% 
+  nest()
+
+## old ingestr version
+df_modis_fpar <- df_modis_fpar %>% 
+  mutate(data = purrr::map(data, ~rename(., fapar = modisvar_filled)))
+
+saveRDS(df_modis_fpar, file = "../data/df_modis_fpar_modis_era.csv")
+```
+
+Check data availability. Must not have any missing.
+```{r}
+visdat::vis_miss(df_modis_fpar %>% unnest(data), cluster = FALSE, warn_large_data = FALSE)
+```
+
 ## FLUXNET data
 
 ```{r eval = FALSE}
-# grab fluxnet data ----
-df_fluxnet <-
-  ingestr::ingest(
-    siteinfo  = df_sites,
-    source    = "fluxnet",
-    getvars   = list(
-      temp = "TA_F_DAY",
-      prec = "P_F",
-      vpd  = "VPD_F_DAY",
-      ppfd = "SW_IN_F",
-      patm = "PA_F",
-      tmin = "TMIN_F"),
-    dir       = "~/data/FLUXNET-2015_Tier1/20191024/DD/",
-    settings  = list(
-      dir_hh = "~/data/FLUXNET-2015_Tier1/20191024/HH/", getswc = FALSE),
-    timescale = "d"
-      )
+filn <- "../data/df_fluxnet.rds"
+if (!file.exists(filn)){
+  df_fluxnet <-
+    ingestr::ingest(
+      siteinfo  = df_sites_modis_era,
+      source    = "fluxnet",
+      getvars   = list(
+        temp = "TA_F_DAY",
+        prec = "P_F",
+        vpd  = "VPD_F_DAY",
+        ppfd = "SW_IN_F",
+        patm = "PA_F",
+        tmin = "TMIN_F",
+        tmax = "TMAX_F"),
+      dir       = "~/data/FLUXNET-2015_Tier1/20191024/DD/",
+      settings  = list(
+        dir_hh = "~/data/FLUXNET-2015_Tier1/20191024/HH/", 
+        dir_hr = "~/data/FLUXNET-2015_Tier1/20191024/HR/",
+        getswc = FALSE
+        ),
+      timescale = "d"
+        )
+  
+  saveRDS(df_fluxnet, file = filn)
+    
+} else {
+  df_fluxnet <- read_rds(filn)
+}
 ```
 
 ## CRU data
 
 ```{r eval = FALSE}
-df_cru <- ingestr::ingest(
-  siteinfo  = df_sites,
-  source    = "cru",
-  getvars   = "ccov",
-  dir       = "~/data/cru/ts_4.01/"
-  )
+filn <- "../data/df_cru.rds"
+if (!file.exists(filn)){
+  df_cru <- ingestr::ingest(
+    siteinfo  = df_sites_modis_era,
+    source    = "cru",
+    getvars   = "ccov",
+    dir       = "~/data/cru/ts_4.01/"
+    )
+  
+  saveRDS(df_cru, file = filn)
+} else {
+  df_cru <- read_rds(filn)
+}
+```
 
-saveRDS(df_cru, file = "../data/df_cru.rds")
+## Meteo data
 
+Derived variables for meteo data frame.
+```{r}
+df_fluxnet <- df_fluxnet %>% 
+  unnest(data) %>% 
+  
+  ## fill missing temp based on mean tmin and tmax
+  mutate(temp = ifelse(is.na(temp), (tmin + tmax)/2, temp)) %>% 
+  
+  ## rain and snow
+  mutate(rain = ifelse(temp > 1,  prec, 0),
+         snow = ifelse(temp <= 1, prec, 0)) %>% 
+  
+  group_by(sitename) %>% 
+  nest()
+  
+## combine with CRU data
 df_meteo <- df_fluxnet %>%
   tidyr::unnest(data) %>%
   left_join(
@@ -59,39 +208,18 @@ df_meteo <- df_fluxnet %>%
       tidyr::unnest(data),
     by = c("sitename", "date")
   ) %>%
+  
+  ## discard pre-modis era data
+  mutate(year = lubridate::year(date)) %>% 
+  dplyr::filter(year >= 2000) %>% 
+  
   group_by(sitename) %>%
   tidyr::nest()
 ```
 
-## MODIS
-
-```{r eval = FALSE}
-settings_modis <- get_settings_modis(
-  bundle            = "modis_fpar",
-  data_path         = "~/data/modis_subsets/",
-  method_interpol   = "loess",
-  network = c("fluxnet", "icos"),
-  keep              = TRUE,
-  overwrite_raw     = FALSE,
-  overwrite_interpol= TRUE,
-  n_focal           = 0
-  )
-
-df_modis_fpar <- ingest(
-  df_sites,
-  source = "modis",
-  settings = settings_modis,
-  parallel = FALSE,
-  ncores = 1
-  )
-
-## renaming the variable
-df_modis_fpar <- df_modis_fpar %>%
-  mutate(
-    data = purrr::map(data, ~rename(., fapar = modisvar_filled))
-    )
-
-saveRDS(df_modis_fpar, file = "../data/df_modis_fpar.rds")
+Check data availability. Must not have any missing. Ok.
+```{r}
+visdat::vis_miss(df_meteo %>% unnest(data), cluster = FALSE, warn_large_data = FALSE)
 ```
 
 ## CO2
@@ -99,7 +227,7 @@ saveRDS(df_modis_fpar, file = "../data/df_modis_fpar.rds")
 ```{r eval = FALSE}
 # . grab CO2 data ----
 df_co2 <- ingestr::ingest(
-  fluxnet_sites,
+  df_sites_modis_era,
   source  = "co2_mlo",
   verbose = FALSE
   )
@@ -161,16 +289,18 @@ input to the `rsofun` p-model. This concludes the formatting of the driver data
 
 ```{r eval = FALSE}
 p_model_fluxnet_drivers <- rsofun::collect_drivers_sofun(
-  site_info      = df_sites,
+  site_info      = df_sites_modis_era,
   params_siml    = params_siml,
   meteo          = df_meteo,
   fapar          = df_modis_fpar,
   co2            = df_co2,
   params_soil    = df_soiltexture
   )
+
+saveRDS(p_model_fluxnet_drivers, file = "../data/p_model_fluxnet_drivers.rds")
 ```
 
-## Model run
+## Model test run
 
 ```{r}
 # run the model for these parameters
